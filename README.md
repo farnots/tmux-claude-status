@@ -158,4 +158,4 @@ set -g @claude_status_jump_key "C"           # prefix+C → next need_input wind
 
 ## License
 
-[MIT](LICENSE)
+[Apache 2.0](LICENSE) — attribution required (see [NOTICE](NOTICE))
