@@ -72,13 +72,13 @@ sweep() {
   now=$(date +%s); changed=0; mode=none
 
   panes=$(t list-panes -a -F \
-    '#{pane_id}|#{window_id}|#{pane_tty}|#{@claude_pane_status}|#{@claude_pane_pid}|#{@claude_pane_status_since}' \
+    '#{pane_id}|#{window_id}|#{pane_tty}|#{@claude_pane_status}|#{@claude_pane_pid}|#{@claude_pane_status_since}|#{@claude_pane_promoted}' \
     2>/dev/null) || { cleanup; exit 0; }
 
   # 1) liveness: a single batched ps; dead = pid gone OR different tty
   #    (the claude process keeps the pane's tty; guards against PID reuse)
   pids=""
-  while IFS='|' read -r pane win tty st pid since; do
+  while IFS='|' read -r pane win tty st pid since prom; do
     [ -n "$st" ] && [ -n "$pid" ] && pids="$pids,$pid"
   done <<EOF
 $panes
@@ -89,7 +89,7 @@ EOF
 
   dead_windows=""
   live_panes=""
-  while IFS='|' read -r pane win tty st pid since; do
+  while IFS='|' read -r pane win tty st pid since prom; do
     [ -n "$st" ] || continue
     if [ -n "$pid" ]; then
       ptty=$(printf '%s\n' "$alive" | awk -v p="$pid" '$1==p{print $2}')
@@ -97,13 +97,14 @@ EOF
         t set -pu -t "$pane" @claude_pane_status \; \
           set -pu -t "$pane" @claude_pane_pid \; \
           set -pu -t "$pane" @claude_pane_status_since \; \
-          set -pu -t "$pane" @claude_pane_flavor 2>/dev/null
+          set -pu -t "$pane" @claude_pane_flavor \; \
+          set -pu -t "$pane" @claude_pane_promoted 2>/dev/null
         dead_windows="$dead_windows $win"; changed=1
         continue
       fi
     fi
     live_panes="$live_panes
-$pane|$win|$st|$since"
+$pane|$win|$st|$since|$prom"
   done <<EOF
 $panes
 EOF
@@ -126,15 +127,75 @@ EOF
     fi
   done
 
-  # 3) per window: counters (window granularity) + need_input durations
-  wins=$(t list-windows -a -F '#{window_id}|#{@claude_win_status}|#{@claude_win_wait}' 2>/dev/null)
+  # 3) per window: counters (window granularity), need_input durations, and
+  #    activity-based correction. Hooks can't see everything: answering a
+  #    question or a background agent running after end-of-turn emit no
+  #    event. But a working Claude redraws its spinner continuously, which
+  #    tmux tracks as window activity. So:
+  #    - need_input/waiting + fresh output on 2 consecutive sweeps → promote
+  #      to working (origin saved in @claude_pane_promoted)
+  #    - daemon-promoted working + output gone stale → roll back to origin
+  #    Real hook events always clear @claude_pane_promoted (authority).
+  wins=$(t list-windows -a -F '#{window_id}|#{@claude_win_status}|#{@claude_win_wait}|#{window_activity}|#{@claude_win_hot}' 2>/dev/null)
   n_need=0; n_err=0; n_work=0; n_wait=0
-  while IFS='|' read -r win agg wait; do
+  while IFS='|' read -r win agg wait activity hot; do
+    fresh=0
+    [ -n "$activity" ] && [ $((now - activity)) -le 2 ] && fresh=1
+
+    if [ "$agg" = "need_input" ] || [ "$agg" = "waiting" ]; then
+      if [ "$fresh" = 1 ] && [ "$hot" = 1 ]; then
+        # Sustained redraw: Claude is actually working. Promote.
+        while IFS='|' read -r p w st since prom; do
+          [ "$w" = "$win" ] || continue
+          case "$st" in
+            need_input|waiting)
+              t set -p -t "$p" @claude_pane_promoted "$st" \; \
+                set -p -t "$p" @claude_pane_status working \; \
+                set -p -t "$p" @claude_pane_status_since "$now" 2>/dev/null ;;
+          esac
+        done <<EOF2
+$live_panes
+EOF2
+        t set -w -t "$win" @claude_win_status working \; \
+          set -wu -t "$win" @claude_win_hot 2>/dev/null
+        [ -n "$wait" ] && t set -wu -t "$win" @claude_win_wait 2>/dev/null
+        agg=working; changed=1
+      elif [ "$fresh" = 1 ]; then
+        t set -w -t "$win" @claude_win_hot 1 2>/dev/null
+      elif [ "$hot" = 1 ]; then
+        t set -wu -t "$win" @claude_win_hot 2>/dev/null
+      fi
+    elif [ "$agg" = "working" ] && [ "$fresh" = 0 ] && \
+         [ -n "$activity" ] && [ $((now - activity)) -gt 8 ]; then
+      # Output went quiet: roll back panes WE promoted (never hook-set ones).
+      rolled=""
+      while IFS='|' read -r p w st since prom; do
+        [ "$w" = "$win" ] && [ "$st" = "working" ] && [ -n "$prom" ] || continue
+        t set -p -t "$p" @claude_pane_status "$prom" \; \
+          set -p -t "$p" @claude_pane_status_since "$now" \; \
+          set -pu -t "$p" @claude_pane_promoted 2>/dev/null
+        case "$prom" in
+          need_input) rolled=need_input ;;
+          waiting)    [ "$rolled" != "need_input" ] && rolled=waiting ;;
+        esac
+      done <<EOF2
+$live_panes
+EOF2
+      if [ -n "$rolled" ]; then
+        t set -w -t "$win" @claude_win_status "$rolled" 2>/dev/null
+        agg=$rolled; changed=1
+      fi
+    fi
+    # Stale hot marker (window switched to working/error via hooks meanwhile)
+    if [ "$hot" = 1 ] && { [ "$agg" = "working" ] || [ "$agg" = "error" ]; }; then
+      t set -wu -t "$win" @claude_win_hot 2>/dev/null
+    fi
+
     case "$agg" in
       need_input)
         n_need=$((n_need+1))
         min_since=""
-        while IFS='|' read -r p w st since; do
+        while IFS='|' read -r p w st since prom; do
           [ "$w" = "$win" ] && [ "$st" = "need_input" ] && [ -n "$since" ] || continue
           if [ -z "$min_since" ] || [ "$since" -lt "$min_since" ]; then min_since=$since; fi
         done <<EOF2
