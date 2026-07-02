@@ -1,0 +1,35 @@
+{
+  "//": "Blocs à fusionner dans la section `hooks` de ~/.claude/settings.json. Ajouter chaque bloc À LA FIN du tableau de l'événement correspondant (ou créer le tableau s'il n'existe pas). Adapter le chemin du script si le repo n'est pas dans ~/Developer/perso/tmux-hook.",
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "/bin/sh ~/Developer/perso/tmux-hook/scripts/claude-status-hook.sh working", "timeout": 5 }] }
+    ],
+    "PreToolUse": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "/bin/sh ~/Developer/perso/tmux-hook/scripts/claude-status-hook.sh working", "timeout": 5 }] }
+    ],
+    "PostToolUse": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "/bin/sh ~/Developer/perso/tmux-hook/scripts/claude-status-hook.sh working", "timeout": 5 }] }
+    ],
+    "PreCompact": [
+      { "hooks": [{ "type": "command", "command": "/bin/sh ~/Developer/perso/tmux-hook/scripts/claude-status-hook.sh working", "timeout": 5 }] }
+    ],
+    "SubagentStop": [
+      { "hooks": [{ "type": "command", "command": "/bin/sh ~/Developer/perso/tmux-hook/scripts/claude-status-hook.sh working", "timeout": 5 }] }
+    ],
+    "PermissionRequest": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "/bin/sh ~/Developer/perso/tmux-hook/scripts/claude-status-hook.sh need_input", "timeout": 5 }] }
+    ],
+    "Notification": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "/bin/sh ~/Developer/perso/tmux-hook/scripts/claude-status-hook.sh notification", "timeout": 5 }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "/bin/sh ~/Developer/perso/tmux-hook/scripts/claude-status-hook.sh waiting", "timeout": 5 }] }
+    ],
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "/bin/sh ~/Developer/perso/tmux-hook/scripts/claude-status-hook.sh waiting", "timeout": 5 }] }
+    ],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "/bin/sh ~/Developer/perso/tmux-hook/scripts/claude-status-hook.sh session_end", "timeout": 5 }] }
+    ]
+  }
+}
