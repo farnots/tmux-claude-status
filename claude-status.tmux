@@ -75,7 +75,7 @@ thm_surface=$(tmux show-option -gqv "@thm_surface_0")
 if [ -n "$thm_surface" ]; then
   tmux set -g @claude_status_summary_text_fg "#{@thm_fg}"
   tmux set -g @claude_badge_summary \
-    "#{?#{@claude_status_summary},#[fg=${color}]#[bg=default]#[fg=#{@thm_crust}]#[bg=${color}]${sum_icon} #[fg=#{@thm_fg}]#[bg=#{@thm_surface_0}] #{E:@claude_status_summary} #[fg=#{@thm_surface_0}]#[bg=default] ,}"
+    "#{?#{@claude_status_summary},#[fg=${color}]#[bg=default]#[fg=#{@thm_crust}]#[bg=${color}] ${sum_icon} #[fg=#{@thm_fg}]#[bg=#{@thm_surface_0}] #{E:@claude_status_summary}#[fg=#{@thm_surface_0}]#[bg=default] ,}"
 else
   tmux set -g @claude_status_summary_text_fg "$color"
   tmux set -g @claude_badge_summary \
