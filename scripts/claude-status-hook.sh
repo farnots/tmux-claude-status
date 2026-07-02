@@ -84,11 +84,17 @@ if [ "$mode" != "recompute" ]; then
       cpid=$(find_claude_pid "$pane_pid") || cpid=$PPID
       [ "$cpid" -gt 1 ] 2>/dev/null && \
         tmux set -p -t "$TMUX_PANE" @claude_pane_pid "$cpid" 2>/dev/null
+      # Saveur de la session (nom du répertoire de config, sans le point) :
+      # "claude", "claude-poly", ... Utile pour l'afficher à la place du nom
+      # de process (le binaire Claude Code s'appelle comme sa version).
+      flavor=$(basename "${CLAUDE_CONFIG_DIR:-$HOME/.claude}")
+      tmux set -p -t "$TMUX_PANE" @claude_pane_flavor "${flavor#.}" 2>/dev/null
     fi
   else
     tmux set -pu -t "$TMUX_PANE" @claude_pane_status 2>/dev/null || exit 0
     tmux set -pu -t "$TMUX_PANE" @claude_pane_status_since 2>/dev/null
     tmux set -pu -t "$TMUX_PANE" @claude_pane_pid 2>/dev/null
+    tmux set -pu -t "$TMUX_PANE" @claude_pane_flavor 2>/dev/null
   fi
   win="$TMUX_PANE"  # un pane id est un target-window valide pour list-panes
 fi

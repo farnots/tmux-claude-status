@@ -95,7 +95,8 @@ EOF
       if [ -z "$ptty" ] || [ "${tty#/dev/tty}" != "$ptty" ]; then
         t set -pu -t "$pane" @claude_pane_status \; \
           set -pu -t "$pane" @claude_pane_pid \; \
-          set -pu -t "$pane" @claude_pane_status_since 2>/dev/null
+          set -pu -t "$pane" @claude_pane_status_since \; \
+          set -pu -t "$pane" @claude_pane_flavor 2>/dev/null
         dead_windows="$dead_windows $win"; changed=1
         continue
       fi
