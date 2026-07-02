@@ -13,9 +13,6 @@
     "PreCompact": [
       { "hooks": [{ "type": "command", "command": "/bin/sh ~/Developer/perso/tmux-hook/scripts/claude-status-hook.sh working_soft", "timeout": 5 }] }
     ],
-    "PermissionRequest": [
-      { "matcher": "*", "hooks": [{ "type": "command", "command": "/bin/sh ~/Developer/perso/tmux-hook/scripts/claude-status-hook.sh need_input", "timeout": 5 }] }
-    ],
     "Notification": [
       { "matcher": "*", "hooks": [{ "type": "command", "command": "/bin/sh ~/Developer/perso/tmux-hook/scripts/claude-status-hook.sh notification", "timeout": 5 }] }
     ],

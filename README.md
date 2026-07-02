@@ -49,6 +49,13 @@ parallèle et ces événements peuvent arriver après le `Stop` de fin de tour
 volontairement pas branché : la fin d'un sous-agent ne dit rien de l'état de
 la boucle principale.
 
+**Anti-faux-need_input** : `need_input` vient de `Notification`
+(`notification_type=permission_prompt`), émise uniquement quand la question
+atteint réellement l'utilisateur — PAS de `PermissionRequest`, qui est émis
+pour chaque demande y compris celles auto-approuvées par un autre hook
+(auquel cas aucun événement ne suivrait avant le `PostToolUse` de fin de
+tool : un long tool laisserait un `?` fantôme pendant toute sa durée).
+
 **Badges** composés par `claude-status.tmux`, à référencer via `#{E:...}` :
 `@claude_badge_win`, `@claude_badge_pane`, `@claude_badge_summary`.
 
