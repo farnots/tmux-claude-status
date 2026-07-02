@@ -1,18 +1,25 @@
 #!/usr/bin/env bash
 # claude-status.tmux — entry point du plugin. Compose les badges de statut
-# Claude Code et installe le hook de nettoyage. À charger depuis tmux.conf :
+# Claude Code, installe les hooks de nettoyage et le binding jump (opt-in).
+# À charger depuis tmux.conf (idéalement APRÈS catppuccin, pour hériter de
+# @thm_red comme couleur d'erreur) :
 #   run-shell /path/to/tmux-hook/claude-status.tmux
 #
-# Badges exposés (à référencer via #{E:...} dans n'importe quel format tmux —
-# window-status, status-right, choose-tree, ...) :
-#   @claude_badge_win  : badge basé sur l'agrégat window @claude_win_status
-#   @claude_badge_pane : badge basé sur @claude_pane_status du pane
+# Badges exposés (à référencer via #{E:...} dans n'importe quel format tmux) :
+#   @claude_badge_win     : statut agrégé de la fenêtre (@claude_win_status)
+#   @claude_badge_pane    : statut du pane (@claude_pane_status)
+#   @claude_badge_summary : résumé global toutes fenêtres, pour status-right
 #
 # Options de personnalisation (à définir AVANT de charger le plugin) :
 #   @claude_status_color            (défaut : #D97757, orange Claude)
-#   @claude_status_icon_working     (défaut : ✳)
+#   @claude_status_error_color     (défaut : @thm_red catppuccin, sinon red)
+#   @claude_status_icon_working     (défaut : ✱ — fallback quand pas de spinner)
 #   @claude_status_icon_need_input  (défaut : ?)
-#   @claude_status_icon_waiting     (défaut : ○)
+#   @claude_status_icon_waiting     (défaut : ●)
+#   @claude_status_icon_error       (défaut : ✗)
+#   @claude_spinner_frames          (défaut : "✻ ✳ ✶ ✱", séparées par espaces)
+#   @claude_status_jump_key         (défaut : vide — pas de binding ; ex: "C"
+#                                    pour prefix+C → saute vers need_input)
 
 CURRENT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
@@ -26,20 +33,42 @@ color=$(get_tmux_option "@claude_status_color" "#D97757")
 icon_working=$(get_tmux_option "@claude_status_icon_working" "✱")
 icon_need_input=$(get_tmux_option "@claude_status_icon_need_input" "?")
 icon_waiting=$(get_tmux_option "@claude_status_icon_waiting" "●")
+icon_error=$(get_tmux_option "@claude_status_icon_error" "✗")
+
+# Rouge adaptatif : override utilisateur > @thm_red catppuccin (suit le
+# flavor clair/sombre) > red ANSI (palette du terminal, thème-agnostique).
+thm_red=$(tmux show-option -gqv "@thm_red")
+err_color=$(get_tmux_option "@claude_status_error_color" "${thm_red:-red}")
+# Publiée pour le démon (segment ✗ du summary).
+tmux set -g @claude_status_error_color_resolved "$err_color"
 
 # ATTENTION format tmux : jamais de virgule à l'intérieur d'un #[...] — tmux
 # compte les virgules des ternaires #{?,,} sans suivre les crochets.
+#
+# Badge 4 états : need_input > error > working > waiting.
+#   - couleur : rouge si error, orange sinon
+#   - working : frame du spinner si le démon tourne, icône statique sinon
+#   - need_input (badge fenêtre) : durée d'attente si posée par le démon
 badge() {
-  local opt="$1"
-  printf '#{?#{%s},#[fg=%s]#[bold]#{?#{==:#{%s},need_input},%s,#{?#{==:#{%s},working},%s,%s}} #[nobold]#[fg=default],}' \
-    "$opt" "$color" \
-    "$opt" "$icon_need_input" \
+  local opt="$1" wait_part="$2"
+  printf '#{?#{%s},#{?#{==:#{%s},error},#[fg=%s],#[fg=%s]}#[bold]#{?#{==:#{%s},need_input},%s %s,#{?#{==:#{%s},error},%s ,#{?#{==:#{%s},working},#{?#{@claude_spinner_frame},#{E:@claude_spinner_frame},%s} ,%s }}}#[nobold]#[fg=default],}' \
+    "$opt" \
+    "$opt" "$err_color" "$color" \
+    "$opt" "$icon_need_input" "$wait_part" \
+    "$opt" "$icon_error" \
     "$opt" "$icon_working" \
     "$icon_waiting"
 }
 
-tmux set -g @claude_badge_win "$(badge '@claude_win_status')"
-tmux set -g @claude_badge_pane "$(badge '@claude_pane_status')"
+# Durée d'attente (option window posée par le démon), espace conditionnel.
+win_wait='#{?#{@claude_win_wait},#{@claude_win_wait} ,}'
+
+tmux set -g @claude_badge_win "$(badge '@claude_win_status' "$win_wait")"
+tmux set -g @claude_badge_pane "$(badge '@claude_pane_status' '')"
+
+# Résumé global (texte posé par le démon), espace final seulement si non vide.
+tmux set -g @claude_badge_summary \
+  "#{?#{@claude_status_summary},#[fg=${color}]#[bold]#{E:@claude_status_summary}#[nobold]#[fg=default] ,}"
 
 # Nettoyage : quand un pane meurt, recalcule l'agrégat de sa window
 # (sinon un @claude_win_status périmé peut survivre au pane Claude).
@@ -47,3 +76,9 @@ tmux set -g @claude_badge_pane "$(badge '@claude_pane_status')"
 # sur la commande kill-pane (prefix+x) — after-kill-pane comble ce trou.
 tmux set-hook -g pane-exited "run-shell \"$CURRENT_DIR/scripts/claude-status-hook.sh recompute #{window_id}\""
 tmux set-hook -g after-kill-pane "run-shell \"$CURRENT_DIR/scripts/claude-status-hook.sh recompute #{window_id}\""
+
+# Jump (opt-in) : prefix+<key> → prochaine fenêtre need_input (puis error).
+jump_key=$(get_tmux_option "@claude_status_jump_key" "")
+[ -n "$jump_key" ] && tmux bind "$jump_key" run-shell "$CURRENT_DIR/scripts/claude-status-jump.sh"
+
+exit 0
