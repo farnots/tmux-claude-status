@@ -34,6 +34,11 @@ color=$(get_tmux_option "@claude_status_color" "#D97757")
 icon_working=$(get_tmux_option "@claude_status_icon_working" "✱")
 icon_need_input=$(get_tmux_option "@claude_status_icon_need_input" "?")
 icon_waiting=$(get_tmux_option "@claude_status_icon_waiting" "●")
+# Waiting badge "shrinks" with age (daemon sets @claude_win_age: 1 then 2)
+# to surface sessions left unattended — a terminal cannot change font size,
+# so smaller glyphs simulate it.
+icon_waiting_old=$(get_tmux_option "@claude_status_icon_waiting_old" "•")
+icon_waiting_stale=$(get_tmux_option "@claude_status_icon_waiting_stale" "·")
 icon_error=$(get_tmux_option "@claude_status_icon_error" "✗")
 
 # Adaptive red: user override > catppuccin @thm_red (follows the light/dark
@@ -52,13 +57,13 @@ tmux set -g @claude_status_error_color_resolved "$err_color"
 #   - need_input (window badge): waiting duration when set by the daemon
 badge() {
   local opt="$1" wait_part="$2"
-  printf '#{?#{%s},#{?#{==:#{%s},error},#[fg=%s],#[fg=%s]}#[bold]#{?#{==:#{%s},need_input},%s %s,#{?#{==:#{%s},error},%s ,#{?#{==:#{%s},working},#{?#{@claude_spinner_frame},#{E:@claude_spinner_frame},%s} ,%s }}}#[nobold]#[fg=default],}' \
+  printf '#{?#{%s},#{?#{==:#{%s},error},#[fg=%s],#[fg=%s]}#[bold]#{?#{==:#{%s},need_input},%s %s,#{?#{==:#{%s},error},%s ,#{?#{==:#{%s},working},#{?#{@claude_spinner_frame},#{E:@claude_spinner_frame},%s} ,#{?#{==:#{@claude_win_age},2},#[dim]%s #[nodim],#{?#{==:#{@claude_win_age},1},%s ,%s }}}}}#[nobold]#[fg=default],}' \
     "$opt" \
     "$opt" "$err_color" "$color" \
     "$opt" "$icon_need_input" "$wait_part" \
     "$opt" "$icon_error" \
     "$opt" "$icon_working" \
-    "$icon_waiting"
+    "$icon_waiting_stale" "$icon_waiting_old" "$icon_waiting"
 }
 
 # Waiting duration (window option set by the daemon), conditional space.

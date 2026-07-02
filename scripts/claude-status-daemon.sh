@@ -55,6 +55,9 @@ icon_work=$(opt @claude_status_icon_working "✱")
 icon_wait=$(opt @claude_status_icon_waiting "●")
 color=$(opt @claude_status_color "#D97757")
 err_color=$(opt @claude_status_error_color_resolved "red")
+# Waiting badge aging thresholds (seconds): ● → • after old, → · after stale
+old_secs=$(opt @claude_status_waiting_old_secs 300)
+stale_secs=$(opt @claude_status_waiting_stale_secs 1800)
 # Color to return to after the ✗ segment: set by the entry point according
 # to the summary rendering context (theme fg in pill mode, orange otherwise).
 text_fg=$(opt @claude_status_summary_text_fg "$color")
@@ -136,9 +139,9 @@ EOF
   #      to working (origin saved in @claude_pane_promoted)
   #    - daemon-promoted working + output gone stale → roll back to origin
   #    Real hook events always clear @claude_pane_promoted (authority).
-  wins=$(t list-windows -a -F '#{window_id}|#{@claude_win_status}|#{@claude_win_wait}|#{window_activity}|#{@claude_win_hot}' 2>/dev/null)
+  wins=$(t list-windows -a -F '#{window_id}|#{@claude_win_status}|#{@claude_win_wait}|#{window_activity}|#{@claude_win_hot}|#{@claude_win_age}' 2>/dev/null)
   n_need=0; n_err=0; n_work=0; n_wait=0
-  while IFS='|' read -r win agg wait activity hot; do
+  while IFS='|' read -r win agg wait activity hot age; do
     fresh=0
     [ -n "$activity" ] && [ $((now - activity)) -le 2 ] && fresh=1
 
@@ -207,10 +210,36 @@ EOF2
         fi ;;
       error)   n_err=$((n_err+1)) ;;
       working) n_work=$((n_work+1)) ;;
-      waiting) n_wait=$((n_wait+1)) ;;
+      waiting)
+        n_wait=$((n_wait+1))
+        # Aging bucket: how long has this window been waiting unattended?
+        min_since=""
+        while IFS='|' read -r p w st since prom; do
+          [ "$w" = "$win" ] && [ "$st" = "waiting" ] && [ -n "$since" ] || continue
+          if [ -z "$min_since" ] || [ "$since" -lt "$min_since" ]; then min_since=$since; fi
+        done <<EOF2
+$live_panes
+EOF2
+        bucket=""
+        if [ -n "$min_since" ]; then
+          w_age=$((now - min_since))
+          if [ "$w_age" -ge "$stale_secs" ]; then bucket=2
+          elif [ "$w_age" -ge "$old_secs" ]; then bucket=1; fi
+        fi
+        if [ "$bucket" != "$age" ]; then
+          if [ -n "$bucket" ]; then
+            t set -w -t "$win" @claude_win_age "$bucket" 2>/dev/null
+          else
+            t set -wu -t "$win" @claude_win_age 2>/dev/null
+          fi
+          changed=1
+        fi ;;
     esac
     if [ "$agg" != "need_input" ] && [ -n "$wait" ]; then
       t set -wu -t "$win" @claude_win_wait 2>/dev/null; changed=1
+    fi
+    if [ "$agg" != "waiting" ] && [ -n "$age" ]; then
+      t set -wu -t "$win" @claude_win_age 2>/dev/null; changed=1
     fi
   done <<EOF
 $wins

@@ -13,7 +13,9 @@ shortcut to jump straight to the session that needs you.
 | waiting | `●` orange | Turn finished, Claude waits for a prompt |
 | error | `✗` red | Claude stopped on an error (StopFailure) |
 
-Windows without a Claude session show nothing.
+Windows without a Claude session show nothing. The waiting badge **ages**:
+`●` shrinks to `•` after 5 minutes and to a dimmed `·` after 30 minutes,
+so sessions you have not checked in a while fade out visually.
 
 ## Screenshots
 
@@ -130,6 +132,10 @@ set -g @claude_status_error_color "red"      # default: catppuccin @thm_red, els
 set -g @claude_status_icon_working "✱"       # static fallback when no animation
 set -g @claude_status_icon_need_input "?"
 set -g @claude_status_icon_waiting "●"
+set -g @claude_status_icon_waiting_old "•"    # waiting for > 5 min
+set -g @claude_status_icon_waiting_stale "·"  # waiting for > 30 min (dimmed)
+set -g @claude_status_waiting_old_secs 300    # aging thresholds (seconds)
+set -g @claude_status_waiting_stale_secs 1800
 set -g @claude_status_icon_error "✗"
 set -g @claude_status_summary_icon "..."     # default: nerd-font robot
 set -g @claude_spinner_frames "✻ ✳ ✶ ✱"     # animation frames, space-separated
