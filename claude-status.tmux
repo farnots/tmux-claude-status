@@ -70,7 +70,10 @@ tmux set -g @claude_badge_pane "$(badge '@claude_pane_status' '')"
 # (@thm_surface_0 présent), rendu en « pill » comme ses modules status-right :
 #   ◖icône sur fond orange◗ compteurs sur fond surface ◗
 # Sinon, texte brut orange. Dans les deux cas : vide → rien (pas d'espace).
-sum_icon=$(get_tmux_option "@claude_status_summary_icon" "✳")
+# Icône par défaut : robot nerd-font (U+F06A9), construit par octets UTF-8
+# (même raison que les séparateurs ci-dessous).
+default_sum_icon=$(printf '\363\260\232\251')
+sum_icon=$(get_tmux_option "@claude_status_summary_icon" "$default_sum_icon")
 # Demi-cercles powerline (U+E0B6 / U+E0B4) construits par octets UTF-8 :
 # des littéraux dans ce fichier risquent d'être perdus par les éditeurs/outils
 # qui ne préservent pas la zone privée Unicode.
