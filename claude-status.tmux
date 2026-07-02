@@ -71,11 +71,16 @@ tmux set -g @claude_badge_pane "$(badge '@claude_pane_status' '')"
 #   ◖icône sur fond orange◗ compteurs sur fond surface ◗
 # Sinon, texte brut orange. Dans les deux cas : vide → rien (pas d'espace).
 sum_icon=$(get_tmux_option "@claude_status_summary_icon" "✳")
+# Demi-cercles powerline (U+E0B6 / U+E0B4) construits par octets UTF-8 :
+# des littéraux dans ce fichier risquent d'être perdus par les éditeurs/outils
+# qui ne préservent pas la zone privée Unicode.
+sep_left=$(printf '\356\202\266')
+sep_right=$(printf '\356\202\264')
 thm_surface=$(tmux show-option -gqv "@thm_surface_0")
 if [ -n "$thm_surface" ]; then
   tmux set -g @claude_status_summary_text_fg "#{@thm_fg}"
   tmux set -g @claude_badge_summary \
-    "#{?#{@claude_status_summary},#[fg=${color}]#[bg=default]#[fg=#{@thm_crust}]#[bg=${color}] ${sum_icon} #[fg=#{@thm_fg}]#[bg=#{@thm_surface_0}] #{E:@claude_status_summary}#[fg=#{@thm_surface_0}]#[bg=default] ,}"
+    "#{?#{@claude_status_summary},#[fg=${color}]#[bg=default]${sep_left}#[fg=#{@thm_crust}]#[bg=${color}]${sum_icon} #[fg=#{@thm_fg}]#[bg=#{@thm_surface_0}] #{E:@claude_status_summary}#[fg=#{@thm_surface_0}]#[bg=default]${sep_right} ,}"
 else
   tmux set -g @claude_status_summary_text_fg "$color"
   tmux set -g @claude_badge_summary \
