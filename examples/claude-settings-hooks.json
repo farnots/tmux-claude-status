@@ -5,16 +5,13 @@
       { "hooks": [{ "type": "command", "command": "/bin/sh ~/Developer/perso/tmux-hook/scripts/claude-status-hook.sh working", "timeout": 5 }] }
     ],
     "PreToolUse": [
-      { "matcher": "*", "hooks": [{ "type": "command", "command": "/bin/sh ~/Developer/perso/tmux-hook/scripts/claude-status-hook.sh working", "timeout": 5 }] }
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "/bin/sh ~/Developer/perso/tmux-hook/scripts/claude-status-hook.sh working_soft", "timeout": 5 }] }
     ],
     "PostToolUse": [
-      { "matcher": "*", "hooks": [{ "type": "command", "command": "/bin/sh ~/Developer/perso/tmux-hook/scripts/claude-status-hook.sh working", "timeout": 5 }] }
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "/bin/sh ~/Developer/perso/tmux-hook/scripts/claude-status-hook.sh working_soft", "timeout": 5 }] }
     ],
     "PreCompact": [
-      { "hooks": [{ "type": "command", "command": "/bin/sh ~/Developer/perso/tmux-hook/scripts/claude-status-hook.sh working", "timeout": 5 }] }
-    ],
-    "SubagentStop": [
-      { "hooks": [{ "type": "command", "command": "/bin/sh ~/Developer/perso/tmux-hook/scripts/claude-status-hook.sh working", "timeout": 5 }] }
+      { "hooks": [{ "type": "command", "command": "/bin/sh ~/Developer/perso/tmux-hook/scripts/claude-status-hook.sh working_soft", "timeout": 5 }] }
     ],
     "PermissionRequest": [
       { "matcher": "*", "hooks": [{ "type": "command", "command": "/bin/sh ~/Developer/perso/tmux-hook/scripts/claude-status-hook.sh need_input", "timeout": 5 }] }

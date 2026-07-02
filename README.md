@@ -40,6 +40,15 @@ session Claude. Il gère tout ce qui demande du temps ou du calcul :
 - **résumé global** : `@claude_status_summary` (« ?1 ✗1 ✱3 ●2 »),
   compte par fenêtre, zéros omis
 
+**Anti-faux-working** : seul `UserPromptSubmit` (début de tour authentique)
+fait passer une session de `waiting` à `working`. Les événements de tool
+(`PreToolUse`/`PostToolUse`/`PreCompact`) posent un working « soft » qui
+n'écrase jamais un `waiting` — indispensable car les hooks tournent en
+parallèle et ces événements peuvent arriver après le `Stop` de fin de tour
+(outils d'agents en arrière-plan notamment). `SubagentStop` n'est
+volontairement pas branché : la fin d'un sous-agent ne dit rien de l'état de
+la boucle principale.
+
 **Badges** composés par `claude-status.tmux`, à référencer via `#{E:...}` :
 `@claude_badge_win`, `@claude_badge_pane`, `@claude_badge_summary`.
 
@@ -72,7 +81,8 @@ set -g @catppuccin_window_current_text "#{E:@claude_badge_win}<votre format exis
 # window-status-format vanilla :
 set -g window-status-format " #I: #{E:@claude_badge_win}#W "
 
-# Résumé global en tête de status-right :
+# Résumé global en tête de status-right (rendu automatique en « pill »
+# catppuccin si le thème est chargé, texte brut orange sinon) :
 set -g status-right "#{E:@claude_badge_summary}<votre status-right existant>"
 
 # choose-tree (prefix+w) — branche window et branche pane :

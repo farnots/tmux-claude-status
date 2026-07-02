@@ -66,9 +66,21 @@ win_wait='#{?#{@claude_win_wait},#{@claude_win_wait} ,}'
 tmux set -g @claude_badge_win "$(badge '@claude_win_status' "$win_wait")"
 tmux set -g @claude_badge_pane "$(badge '@claude_pane_status' '')"
 
-# Résumé global (texte posé par le démon), espace final seulement si non vide.
-tmux set -g @claude_badge_summary \
-  "#{?#{@claude_status_summary},#[fg=${color}]#[bold]#{E:@claude_status_summary}#[nobold]#[fg=default] ,}"
+# Résumé global (texte posé par le démon). Si catppuccin est chargé
+# (@thm_surface_0 présent), rendu en « pill » comme ses modules status-right :
+#   ◖icône sur fond orange◗ compteurs sur fond surface ◗
+# Sinon, texte brut orange. Dans les deux cas : vide → rien (pas d'espace).
+sum_icon=$(get_tmux_option "@claude_status_summary_icon" "✳")
+thm_surface=$(tmux show-option -gqv "@thm_surface_0")
+if [ -n "$thm_surface" ]; then
+  tmux set -g @claude_status_summary_text_fg "#{@thm_fg}"
+  tmux set -g @claude_badge_summary \
+    "#{?#{@claude_status_summary},#[fg=${color}]#[bg=default]#[fg=#{@thm_crust}]#[bg=${color}]${sum_icon} #[fg=#{@thm_fg}]#[bg=#{@thm_surface_0}] #{E:@claude_status_summary} #[fg=#{@thm_surface_0}]#[bg=default] ,}"
+else
+  tmux set -g @claude_status_summary_text_fg "$color"
+  tmux set -g @claude_badge_summary \
+    "#{?#{@claude_status_summary},#[fg=${color}]#[bold]#{E:@claude_status_summary}#[nobold]#[fg=default] ,}"
+fi
 
 # Nettoyage : quand un pane meurt, recalcule l'agrégat de sa window
 # (sinon un @claude_win_status périmé peut survivre au pane Claude).

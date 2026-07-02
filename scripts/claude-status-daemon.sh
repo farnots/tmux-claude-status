@@ -54,6 +54,9 @@ icon_work=$(opt @claude_status_icon_working "✱")
 icon_wait=$(opt @claude_status_icon_waiting "●")
 color=$(opt @claude_status_color "#D97757")
 err_color=$(opt @claude_status_error_color_resolved "red")
+# Couleur de retour après le segment ✗ : posée par l'entry point selon le
+# contexte de rendu du summary (fg du thème en mode pill, orange sinon).
+text_fg=$(opt @claude_status_summary_text_fg "$color")
 set -- $frames; nframes=$#; fi=0
 
 fmt_dur() {  # 30s / 3m / 1h05
@@ -153,7 +156,7 @@ EOF
   # 4) summary global (zéros omis, ordre d'actionnabilité)
   summary=""
   [ "$n_need" -gt 0 ] && summary="${summary}${icon_need}${n_need} "
-  [ "$n_err"  -gt 0 ] && summary="${summary}#[fg=${err_color}]${icon_err}${n_err}#[fg=${color}] "
+  [ "$n_err"  -gt 0 ] && summary="${summary}#[fg=${err_color}]${icon_err}${n_err}#[fg=${text_fg}] "
   [ "$n_work" -gt 0 ] && summary="${summary}${icon_work}${n_work} "
   [ "$n_wait" -gt 0 ] && summary="${summary}${icon_wait}${n_wait} "
   summary=${summary% }

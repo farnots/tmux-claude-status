@@ -44,8 +44,15 @@ find_claude_pid() {  # $1 = pane_pid
   return 1
 }
 
+soft=0
 case "$mode" in
   working|waiting|need_input|error) status="$mode" ;;
+  working_soft)
+    # PreToolUse/PostToolUse/PreCompact : ces événements peuvent arriver EN
+    # RETARD, après le Stop de fin de tour (hooks parallèles, outils d'agents
+    # en arrière-plan). Un working "soft" n'écrase jamais un waiting — seul
+    # UserPromptSubmit (début de tour authentique) fait waiting → working.
+    status=working; soft=1 ;;
   notification)
     case "$(json_field notification_type)" in
       permission_prompt) status=need_input ;;
@@ -66,6 +73,7 @@ if [ "$mode" != "recompute" ]; then
   [ -n "$TMUX_PANE" ] || exit 0
   cur=$(tmux show -pqv -t "$TMUX_PANE" @claude_pane_status 2>/dev/null) || exit 0
   [ "$cur" = "$status" ] && exit 0
+  [ "$soft" = 1 ] && [ "$cur" = "waiting" ] && exit 0
   if [ -n "$status" ]; then
     tmux set -p -t "$TMUX_PANE" @claude_pane_status "$status" 2>/dev/null || exit 0
     tmux set -p -t "$TMUX_PANE" @claude_pane_status_since "$(date +%s)" 2>/dev/null
