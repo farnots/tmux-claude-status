@@ -23,20 +23,19 @@ get_tmux_option() {
 }
 
 color=$(get_tmux_option "@claude_status_color" "#D97757")
-icon_working=$(get_tmux_option "@claude_status_icon_working" "✳")
+icon_working=$(get_tmux_option "@claude_status_icon_working" "✱")
 icon_need_input=$(get_tmux_option "@claude_status_icon_need_input" "?")
-icon_waiting=$(get_tmux_option "@claude_status_icon_waiting" "○")
+icon_waiting=$(get_tmux_option "@claude_status_icon_waiting" "●")
 
 # ATTENTION format tmux : jamais de virgule à l'intérieur d'un #[...] — tmux
 # compte les virgules des ternaires #{?,,} sans suivre les crochets.
 badge() {
   local opt="$1"
-  printf '#{?#{%s},#{?#{==:#{%s},need_input},#[fg=%s]#[bold]%s #[nobold],#{?#{==:#{%s},working},#[fg=%s]%s ,#[fg=%s]#[dim]%s #[nodim]}}#[fg=default],}' \
-    "$opt" "$opt" \
-    "$color" "$icon_need_input" \
-    "$opt" \
-    "$color" "$icon_working" \
-    "$color" "$icon_waiting"
+  printf '#{?#{%s},#[fg=%s]#[bold]#{?#{==:#{%s},need_input},%s,#{?#{==:#{%s},working},%s,%s}} #[nobold]#[fg=default],}' \
+    "$opt" "$color" \
+    "$opt" "$icon_need_input" \
+    "$opt" "$icon_working" \
+    "$icon_waiting"
 }
 
 tmux set -g @claude_badge_win "$(badge '@claude_win_status')"

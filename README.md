@@ -6,9 +6,9 @@ un badge indique si Claude travaille, attend une décision ou attend un prompt.
 
 | Statut | Badge (défaut) | Signification |
 |---|---|---|
-| working | `✳` orange | Claude traite un prompt / exécute des tools |
+| working | `✱` orange gras | Claude traite un prompt / exécute des tools |
 | need input | `?` orange gras | Claude attend une permission ou une réponse |
-| waiting | `○` orange atténué | Tour terminé, Claude attend un prompt |
+| waiting | `●` orange gras | Tour terminé, Claude attend un prompt |
 
 Fenêtre sans session Claude → aucun badge.
 
@@ -65,9 +65,9 @@ bind w choose-tree -Zw -F "#{?pane_format,#{E:@claude_badge_pane}...,#{?window_f
 
 ```tmux
 set -g @claude_status_color "#D97757"       # orange Claude par défaut
-set -g @claude_status_icon_working "✳"
+set -g @claude_status_icon_working "✱"
 set -g @claude_status_icon_need_input "?"
-set -g @claude_status_icon_waiting "○"
+set -g @claude_status_icon_waiting "●"
 ```
 
 ## Limitations connues
