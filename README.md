@@ -15,6 +15,16 @@ shortcut to jump straight to the session that needs you.
 
 Windows without a Claude session show nothing.
 
+## Screenshots
+
+Global summary pill and session flavor in the status bar:
+
+![status bar](screenshots/status-bar.png)
+
+Per-window badges in the `choose-tree` window picker:
+
+![window picker](screenshots/window-picker.png)
+
 ## How it works
 
 **Claude Code hooks** (`settings.json`) call `scripts/claude-status-hook.sh`
