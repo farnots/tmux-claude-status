@@ -1,39 +1,40 @@
 #!/bin/sh
 # claude-status-daemon.sh <socket_path>
 #
-# Démon compagnon du plugin claude-status. Spawné par le serveur tmux
-# (run-shell -b depuis claude-status-hook.sh) : il est fils du serveur et
-# meurt avec lui. Vivant tant qu'au moins un pane a un @claude_pane_status.
+# Companion daemon of the claude-status plugin. Spawned by the tmux server
+# itself (run-shell -b from claude-status-hook.sh): it is a child of the
+# server and dies with it. Alive as long as at least one pane has a
+# @claude_pane_status.
 #
-# Responsabilités (propriété exclusive de ces options) :
-#   @claude_spinner_frame   (global) : frame d'animation quand ≥1 working
-#   @claude_status_summary  (global) : résumé toutes fenêtres « ?1 ✗1 ✱3 ●2 »
-#   @claude_win_wait        (window) : durée d'attente des fenêtres need_input
-# Et : liveness — efface le statut des panes dont le process claude est mort.
-# Le hook reste l'autorité sur les statuts en régime événementiel ; le démon
-# ne recalcule un agrégat window QUE pour les panes qu'il vient d'effacer.
+# Responsibilities (exclusive ownership of these options):
+#   @claude_spinner_frame   (global) : animation frame while ≥1 window works
+#   @claude_status_summary  (global) : all-windows summary "?1 ✗1 ✱3 ●2"
+#   @claude_win_wait        (window) : waiting duration of need_input windows
+# Plus: liveness — clears the status of panes whose claude process is dead.
+# The hook remains the authority on statuses in event-driven mode; the daemon
+# only recomputes a window aggregate for panes it just cleared.
 
 sock=$1
 [ -S "$sock" ] || exit 0
 t() { tmux -S "$sock" "$@"; }
 
-# ---- single-instance : mkdir-lock atomique, nommé par pid du serveur ----
+# ---- single instance: atomic mkdir lock, named after the server pid ----
 server_pid=$(t display -p '#{pid}' 2>/dev/null) || exit 0
 lock="${TMPDIR:-/tmp}/claude-status-daemon-${server_pid}.lock"
 acquire() {
   if mkdir "$lock" 2>/dev/null; then echo $$ > "$lock/pid"; return 0; fi
   old=$(cat "$lock/pid" 2>/dev/null)
   if [ -n "$old" ]; then
-    kill -0 "$old" 2>/dev/null && return 1  # démon vivant → on est un doublon
+    kill -0 "$old" 2>/dev/null && return 1  # live daemon → we are a duplicate
   else
-    # pid pas encore écrit : le gagnant vient probablement de créer le lock
-    # (fenêtre mkdir→echo). Ne voler que si le lock est manifestement stale.
+    # pid not written yet: the winner probably just created the lock
+    # (mkdir→echo window). Only steal if the lock is clearly stale.
     mtime=$(stat -f %m "$lock" 2>/dev/null || stat -c %Y "$lock" 2>/dev/null || echo 0)
     [ $(( $(date +%s) - mtime )) -lt 30 ] && return 1
   fi
   rm -rf "$lock"
   if mkdir "$lock" 2>/dev/null; then echo $$ > "$lock/pid"; return 0; fi
-  return 1  # course de nettoyage perdue : un concurrent a gagné, tant mieux
+  return 1  # lost the cleanup race: a concurrent daemon won, which is fine
 }
 acquire || exit 0
 
@@ -45,7 +46,7 @@ cleanup() {
 trap 'cleanup; exit 0' TERM INT
 t set -g @claude_daemon_pid $$ 2>/dev/null || { rm -rf "$lock"; exit 0; }
 
-# ---- config (lue une fois au démarrage) ----
+# ---- config (read once at startup) ----
 opt() { v=$(t show -gqv "$1" 2>/dev/null); [ -n "$v" ] && echo "$v" || echo "$2"; }
 frames=$(opt @claude_spinner_frames "✻ ✳ ✶ ✱")
 icon_need=$(opt @claude_status_icon_need_input "?")
@@ -54,8 +55,8 @@ icon_work=$(opt @claude_status_icon_working "✱")
 icon_wait=$(opt @claude_status_icon_waiting "●")
 color=$(opt @claude_status_color "#D97757")
 err_color=$(opt @claude_status_error_color_resolved "red")
-# Couleur de retour après le segment ✗ : posée par l'entry point selon le
-# contexte de rendu du summary (fg du thème en mode pill, orange sinon).
+# Color to return to after the ✗ segment: set by the entry point according
+# to the summary rendering context (theme fg in pill mode, orange otherwise).
 text_fg=$(opt @claude_status_summary_text_fg "$color")
 set -- $frames; nframes=$#; fi=0
 
@@ -66,7 +67,7 @@ fmt_dur() {  # 30s / 3m / 1h05
   else printf '%dh%02d' $((s / 3600)) $(( (s % 3600) / 60 )); fi
 }
 
-# ---- sweep : liveness, durées, summary. Pose $mode pour la boucle. ----
+# ---- sweep: liveness, durations, summary. Sets $mode for the main loop. ----
 sweep() {
   now=$(date +%s); changed=0; mode=none
 
@@ -74,8 +75,8 @@ sweep() {
     '#{pane_id}|#{window_id}|#{pane_tty}|#{@claude_pane_status}|#{@claude_pane_pid}|#{@claude_pane_status_since}' \
     2>/dev/null) || { cleanup; exit 0; }
 
-  # 1) liveness : un seul ps batché ; mort = pid absent OU tty différent
-  #    (le process claude garde le tty du pane ; contre la réutilisation de PID)
+  # 1) liveness: a single batched ps; dead = pid gone OR different tty
+  #    (the claude process keeps the pane's tty; guards against PID reuse)
   pids=""
   while IFS='|' read -r pane win tty st pid since; do
     [ -n "$st" ] && [ -n "$pid" ] && pids="$pids,$pid"
@@ -107,7 +108,7 @@ $pane|$win|$st|$since"
 $panes
 EOF
 
-  # 2) agrégats : uniquement les fenêtres dont on vient de tuer un pane
+  # 2) aggregates: only for windows we just cleared a pane from
   for win in $(printf '%s\n' $dead_windows | sort -u); do
     agg=""
     for s in $(t list-panes -t "$win" -F '#{@claude_pane_status}' 2>/dev/null); do
@@ -125,7 +126,7 @@ EOF
     fi
   done
 
-  # 3) par fenêtre : compteurs (granularité fenêtre) + durées need_input
+  # 3) per window: counters (window granularity) + need_input durations
   wins=$(t list-windows -a -F '#{window_id}|#{@claude_win_status}|#{@claude_win_wait}' 2>/dev/null)
   n_need=0; n_err=0; n_work=0; n_wait=0
   while IFS='|' read -r win agg wait; do
@@ -154,7 +155,7 @@ EOF2
 $wins
 EOF
 
-  # 4) summary global (zéros omis, ordre d'actionnabilité)
+  # 4) global summary (zeros omitted, actionability order)
   summary=""
   [ "$n_need" -gt 0 ] && summary="${summary}${icon_need}${n_need} "
   [ "$n_err"  -gt 0 ] && summary="${summary}#[fg=${err_color}]${icon_err}${n_err}#[fg=${text_fg}] "
@@ -170,7 +171,7 @@ EOF
     changed=1
   }
 
-  # 5) mode pour la boucle principale
+  # 5) mode for the main loop
   total=$((n_need + n_err + n_work + n_wait))
   clients=$(t list-clients 2>/dev/null | grep -c .)
   if [ "$total" -eq 0 ]; then
@@ -183,14 +184,14 @@ EOF
   [ "$changed" = 1 ] && [ "$clients" -gt 0 ] && t refresh-client -S 2>/dev/null
 }
 
-# ---- boucle principale ----
+# ---- main loop ----
 while :; do
   sweep
   case $mode in
     none)
       cleanup; exit 0 ;;
     working)
-      # ~5 s de ticks rapides (animation) puis re-sweep
+      # ~5 s of fast ticks (animation), then re-sweep
       n=0
       while [ "$n" -lt 12 ]; do
         fi=$(( (fi % nframes) + 1 ))

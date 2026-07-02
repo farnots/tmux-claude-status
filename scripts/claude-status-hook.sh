@@ -1,37 +1,38 @@
 #!/bin/sh
-# claude-status-hook.sh — met à jour le statut Claude Code d'un pane/window tmux.
+# claude-status-hook.sh — updates the Claude Code status of a tmux pane/window.
 #
 # Usage: claude-status-hook.sh <mode> [window_id]
-#   modes hook Claude Code : working | waiting | need_input | error |
-#                            notification | session_end
-#     (appelés depuis les hooks de settings.json ; le statut est passé en argv,
-#      seuls notification et session_end lisent le JSON stdin)
-#   mode tmux : recompute <window_id>
-#     (appelé par le hook tmux pane-exited pour recalculer l'agrégat d'une
-#      window dont un pane vient de mourir)
+#   Claude Code hook modes: working | working_soft | waiting | need_input |
+#                           error | notification | session_end
+#     (called from settings.json hooks; the status is passed as argv, only
+#      notification and session_end read the JSON on stdin)
+#   tmux mode: recompute <window_id>
+#     (called by the tmux pane-exited / after-kill-pane hooks to recompute
+#      the aggregate of a window whose pane just died)
 #
-# Options tmux posées :
+# tmux options set:
 #   @claude_pane_status       (pane)   : working | need_input | waiting | error
-#   @claude_pane_status_since (pane)   : epoch du dernier changement de statut
-#   @claude_pane_pid          (pane)   : PID du process claude (liveness démon)
-#   @claude_win_status        (window) : agrégat des panes, priorité
+#   @claude_pane_status_since (pane)   : epoch of the last status change
+#   @claude_pane_pid          (pane)   : PID of the claude process (liveness)
+#   @claude_pane_flavor       (pane)   : config dir name ("claude", ...)
+#   @claude_win_status        (window) : pane aggregate, priority
 #                                        need_input > error > working > waiting
 #
-# Ne jamais bloquer ni faire échouer Claude : tout chemin sort en `exit 0`.
+# Never block or fail Claude: every path exits 0.
 
 [ -n "$TMUX" ] || exit 0
 mode="$1"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 json_field() {
-  # Extraction minimale d'un champ string du JSON stdin. Suffisant ici :
-  # les valeurs attendues sont des identifiants fixes sans échappement.
+  # Minimal extraction of a string field from the JSON on stdin. Sufficient
+  # here: expected values are fixed identifiers without escaping.
   sed -n 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
 }
 
-# Remonte la chaîne des ppid depuis ce script jusqu'au fils direct du shell
-# racine du pane (= le process claude au premier plan). Gère aussi le cas où
-# claude a été lancé en `exec` (claude EST pane_pid).
+# Walk the ppid chain from this script up to the direct child of the pane's
+# root shell (= the foreground claude process). Also handles claude launched
+# with `exec` (claude IS pane_pid).
 find_claude_pid() {  # $1 = pane_pid
   pane_root=$1; pid=$$; i=0
   while [ "$i" -lt 8 ]; do
@@ -48,21 +49,26 @@ soft=0
 case "$mode" in
   working|waiting|need_input|error) status="$mode" ;;
   working_soft)
-    # PreToolUse/PostToolUse/PreCompact : ces événements peuvent arriver EN
-    # RETARD, après le Stop de fin de tour (hooks parallèles, outils d'agents
-    # en arrière-plan). Un working "soft" n'écrase jamais un waiting — seul
-    # UserPromptSubmit (début de tour authentique) fait waiting → working.
+    # PreToolUse/PostToolUse/PreCompact: these events can arrive LATE, after
+    # the end-of-turn Stop (hooks run in parallel, background agents run
+    # tools too). A "soft" working never overrides a waiting — only
+    # UserPromptSubmit (a genuine turn start) does waiting → working.
     status=working; soft=1 ;;
   notification)
+    # need_input comes from Notification(permission_prompt) ONLY: it fires
+    # when the question actually reaches the user. PermissionRequest is not
+    # used — it fires for every request, including ones auto-approved by
+    # another hook, which would leave a phantom "?" for the whole duration
+    # of a long tool (no event until its PostToolUse).
     case "$(json_field notification_type)" in
       permission_prompt) status=need_input ;;
       idle_prompt)       status=waiting ;;
       *)                 exit 0 ;;
     esac ;;
   session_end)
-    # /clear émet SessionEnd(reason=clear) puis SessionStart, en parallèle :
-    # effacer ici perdrait la course contre le `waiting` du SessionStart.
-    # Poser `waiting` est idempotent quel que soit l'ordre d'exécution.
+    # /clear emits SessionEnd(reason=clear) then SessionStart, in parallel:
+    # unsetting here could lose the race against SessionStart's `waiting`.
+    # Setting `waiting` is idempotent whatever the execution order.
     if [ "$(json_field reason)" = "clear" ]; then status=waiting; else status=""; fi ;;
   recompute)
     win="$2"; [ -n "$win" ] || exit 0 ;;
@@ -77,16 +83,16 @@ if [ "$mode" != "recompute" ]; then
   if [ -n "$status" ]; then
     tmux set -p -t "$TMUX_PANE" @claude_pane_status "$status" 2>/dev/null || exit 0
     tmux set -p -t "$TMUX_PANE" @claude_pane_status_since "$(date +%s)" 2>/dev/null
-    # PID claude pour la liveness du démon — seulement si absent (le sweep
-    # l'efface quand le process meurt).
+    # Claude PID for the daemon's liveness check — only when absent (the
+    # sweep unsets it when the process dies).
     if [ -z "$(tmux show -pqv -t "$TMUX_PANE" @claude_pane_pid 2>/dev/null)" ]; then
       pane_pid=$(tmux display -p -t "$TMUX_PANE" '#{pane_pid}' 2>/dev/null)
       cpid=$(find_claude_pid "$pane_pid") || cpid=$PPID
       [ "$cpid" -gt 1 ] 2>/dev/null && \
         tmux set -p -t "$TMUX_PANE" @claude_pane_pid "$cpid" 2>/dev/null
-      # Saveur de la session (nom du répertoire de config, sans le point) :
-      # "claude", "claude-poly", ... Utile pour l'afficher à la place du nom
-      # de process (le binaire Claude Code s'appelle comme sa version).
+      # Session flavor (config dir name, dot stripped): "claude",
+      # "claude-poly", ... Useful to display instead of the process name
+      # (the Claude Code binary is named after its version number).
       flavor=$(basename "${CLAUDE_CONFIG_DIR:-$HOME/.claude}")
       tmux set -p -t "$TMUX_PANE" @claude_pane_flavor "${flavor#.}" 2>/dev/null
     fi
@@ -96,10 +102,10 @@ if [ "$mode" != "recompute" ]; then
     tmux set -pu -t "$TMUX_PANE" @claude_pane_pid 2>/dev/null
     tmux set -pu -t "$TMUX_PANE" @claude_pane_flavor 2>/dev/null
   fi
-  win="$TMUX_PANE"  # un pane id est un target-window valide pour list-panes
+  win="$TMUX_PANE"  # a pane id is a valid target-window for list-panes
 fi
 
-# Agrégat window : need_input > error > working > waiting ; vide si aucun pane
+# Window aggregate: need_input > error > working > waiting; empty if no pane
 agg=""
 for s in $(tmux list-panes -t "$win" -F '#{@claude_pane_status}' 2>/dev/null); do
   case "$s" in
@@ -120,8 +126,8 @@ if [ "$old" != "$agg" ]; then
   tmux refresh-client -S 2>/dev/null
 fi
 
-# Réveil du démon (animation, liveness, durées, summary). Heuristique rapide
-# tolérante aux faux positifs : le démon a son propre mkdir-lock atomique.
+# Wake the daemon (animation, liveness, durations, summary). Fast heuristic,
+# tolerant to false positives: the daemon has its own atomic mkdir lock.
 if [ "$mode" != "recompute" ] && [ -n "$status" ]; then
   dpid=$(tmux show -gqv @claude_daemon_pid 2>/dev/null)
   if [ -z "$dpid" ] || ! kill -0 "$dpid" 2>/dev/null; then

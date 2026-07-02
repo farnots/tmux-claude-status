@@ -1,128 +1,151 @@
-# tmux-hook · claude-status
+# tmux-claude-status
 
-Affiche le statut des sessions [Claude Code](https://claude.com/claude-code)
-dans tmux : sur chaque fenêtre (barre de statut, sélecteur `choose-tree`),
-un badge indique si Claude travaille, attend une décision, attend un prompt
-ou s'est arrêté sur une erreur — plus un résumé global et un raccourci pour
-sauter vers la session qui attend.
+Show the live status of your [Claude Code](https://claude.com/claude-code)
+sessions in tmux: every window gets a badge (status bar and `choose-tree`
+window picker) telling you whether Claude is working, waiting for your
+decision, idle, or stopped on an error — plus a global summary and a
+shortcut to jump straight to the session that needs you.
 
-| Statut | Badge (défaut) | Signification |
+| Status | Badge (default) | Meaning |
 |---|---|---|
-| working | `✻` animé, orange | Claude traite un prompt / exécute des tools |
-| need input | `? 3m` orange gras | Claude attend une permission — avec la durée d'attente |
-| waiting | `●` orange | Tour terminé, Claude attend un prompt |
-| error | `✗` rouge | Claude s'est arrêté sur une erreur (StopFailure) |
+| working | `✻` animated, orange | Claude is processing a prompt / running tools |
+| need input | `? 3m` bold orange | Claude is waiting for a permission — with waiting time |
+| waiting | `●` orange | Turn finished, Claude waits for a prompt |
+| error | `✗` red | Claude stopped on an error (StopFailure) |
 
-Fenêtre sans session Claude → aucun badge.
+Windows without a Claude session show nothing.
 
-## Fonctionnement
+## How it works
 
-**Hooks Claude Code** (`settings.json`) → `scripts/claude-status-hook.sh` à
-chaque événement. Le script pose des user options tmux :
+**Claude Code hooks** (`settings.json`) call `scripts/claude-status-hook.sh`
+on every event. The script sets tmux user options:
 
-- `@claude_pane_status` (pane) — statut du pane
-- `@claude_pane_status_since` (pane) — epoch du dernier changement
-- `@claude_pane_pid` (pane) — PID du process claude (pour la liveness)
-- `@claude_win_status` (window) — agrégat, priorité
+- `@claude_pane_status` (pane) — pane status
+- `@claude_pane_status_since` (pane) — epoch of the last change
+- `@claude_pane_pid` (pane) — claude process PID (for liveness)
+- `@claude_pane_flavor` (pane) — config dir name (`claude`, `claude-work`, …),
+  handy because the Claude Code binary is named after its version number
+- `@claude_win_status` (window) — aggregate, priority
   `need_input` > `error` > `working` > `waiting`
 
-**Démon compagnon** (`scripts/claude-status-daemon.sh`) — démarré à la
-demande par le hook, **fils du serveur tmux** (spawné via `run-shell -b`,
-meurt avec lui), single-instance (mkdir-lock), s'éteint quand plus aucune
-session Claude. Il gère tout ce qui demande du temps ou du calcul :
+**Companion daemon** (`scripts/claude-status-daemon.sh`) — started on demand
+by the hook, **child of the tmux server** (spawned via `run-shell -b`, dies
+with it), single instance (mkdir lock), exits by itself when no Claude
+session remains. It handles everything that needs time or computation:
 
-- **animation** : `@claude_spinner_frame` avance à ~2,5 fps quand ≥1 fenêtre
-  working ET ≥1 client attaché
-- **liveness** : un `ps` batché par sweep (~5 s) vérifie que chaque
-  `@claude_pane_pid` est vivant **et** sur le tty de son pane (imparable
-  contre les kill -9 et la réutilisation de PID) ; sinon efface le statut
-- **durées** : `@claude_win_wait` (« 3m ») pour les fenêtres need_input
-- **résumé global** : `@claude_status_summary` (« ?1 ✗1 ✱3 ●2 »),
-  compte par fenêtre, zéros omis
+- **animation**: `@claude_spinner_frame` advances at ~2.5 fps while ≥1
+  window is working AND ≥1 client is attached
+- **liveness**: one batched `ps` per sweep (~5 s) checks that each
+  `@claude_pane_pid` is alive **and** on its pane's tty (robust against
+  kill -9 and PID reuse); otherwise clears the status
+- **durations**: `@claude_win_wait` (“3m”) for need_input windows
+- **global summary**: `@claude_status_summary` (“?1 ✗1 ✱3 ●2”),
+  counted per window, zeros omitted
 
-**Anti-faux-working** : seul `UserPromptSubmit` (début de tour authentique)
-fait passer une session de `waiting` à `working`. Les événements de tool
-(`PreToolUse`/`PostToolUse`/`PreCompact`) posent un working « soft » qui
-n'écrase jamais un `waiting` — indispensable car les hooks tournent en
-parallèle et ces événements peuvent arriver après le `Stop` de fin de tour
-(outils d'agents en arrière-plan notamment). `SubagentStop` n'est
-volontairement pas branché : la fin d'un sous-agent ne dit rien de l'état de
-la boucle principale.
+**Badges** are composed by `claude-status.tmux`; reference them with
+`#{E:...}`: `@claude_badge_win`, `@claude_badge_pane`,
+`@claude_badge_summary`.
 
-**Anti-faux-need_input** : `need_input` vient de `Notification`
-(`notification_type=permission_prompt`), émise uniquement quand la question
-atteint réellement l'utilisateur — PAS de `PermissionRequest`, qui est émis
-pour chaque demande y compris celles auto-approuvées par un autre hook
-(auquel cas aucun événement ne suivrait avant le `PostToolUse` de fin de
-tool : un long tool laisserait un `?` fantôme pendant toute sa durée).
+**No phantom working**: only `UserPromptSubmit` (a genuine turn start) moves
+a session from `waiting` to `working`. Tool events
+(`PreToolUse`/`PostToolUse`/`PreCompact`) set a “soft” working that never
+overrides a `waiting` — essential because hooks run in parallel and these
+events can arrive after the end-of-turn `Stop` (background agents run tools
+too). `SubagentStop` is intentionally not wired: a subagent finishing says
+nothing about the main loop state.
 
-**Badges** composés par `claude-status.tmux`, à référencer via `#{E:...}` :
-`@claude_badge_win`, `@claude_badge_pane`, `@claude_badge_summary`.
+**No phantom need_input**: `need_input` comes from `Notification`
+(`notification_type=permission_prompt`), which only fires when the question
+actually reaches the user — NOT from `PermissionRequest`, which fires for
+every request including ones auto-approved by another hook (a long tool
+would keep a phantom `?` for its whole duration).
 
 ## Installation
 
-### 1. Charger le plugin dans `~/.tmux.conf`
+### With TPM
 
 ```tmux
-# idéalement APRÈS catppuccin (hérite de @thm_red pour la couleur d'erreur)
-run-shell ~/Developer/perso/tmux-hook/claude-status.tmux
+set -g @plugin 'farnots/tmux-claude-status'
 ```
 
-### 2. Brancher les hooks Claude Code
+Press `prefix + I` to install. Load it **after** your theme (e.g. catppuccin)
+so the plugin inherits its colors.
 
-Fusionner les blocs de [`examples/claude-settings-hooks.json`](examples/claude-settings-hooks.json)
-dans la section `hooks` de `~/.claude/settings.json` (à la fin de chaque
-tableau d'événement, sans toucher aux hooks existants — les hooks d'un même
-événement tournent en parallèle).
+### Manual
 
-⚠️ Les sessions Claude déjà ouvertes ne prennent les hooks en compte
-qu'après relance.
-
-### 3. Afficher les badges où vous voulez
+```sh
+git clone https://github.com/farnots/tmux-claude-status ~/.tmux/plugins/tmux-claude-status
+```
 
 ```tmux
-# Barre de fenêtres (exemple avec catppuccin) :
-set -g @catppuccin_window_text "#{E:@claude_badge_win}<votre format existant>"
-set -g @catppuccin_window_current_text "#{E:@claude_badge_win}<votre format existant>"
+# in ~/.tmux.conf, ideally AFTER catppuccin (inherits @thm_red for errors)
+run-shell ~/.tmux/plugins/tmux-claude-status/claude-status.tmux
+```
 
-# window-status-format vanilla :
+### Wire up the Claude Code hooks
+
+Merge the blocks from
+[`examples/claude-settings-hooks.json`](examples/claude-settings-hooks.json)
+into the `hooks` section of `~/.claude/settings.json` (append at the end of
+each event array, without touching your existing hooks — hooks of the same
+event run in parallel).
+
+⚠️ Already-open Claude sessions pick up new hooks only after a restart.
+
+### Show the badges wherever you like
+
+```tmux
+# Window list (catppuccin example):
+set -g @catppuccin_window_text "#{E:@claude_badge_win}<your existing format>"
+set -g @catppuccin_window_current_text "#{E:@claude_badge_win}<your existing format>"
+
+# Vanilla window-status-format:
 set -g window-status-format " #I: #{E:@claude_badge_win}#W "
 
-# Résumé global en tête de status-right (rendu automatique en « pill »
-# catppuccin si le thème est chargé, texte brut orange sinon) :
-set -g status-right "#{E:@claude_badge_summary}<votre status-right existant>"
+# Global summary at the head of status-right (auto-renders as a catppuccin
+# "pill" when the theme is loaded, plain orange text otherwise):
+set -g status-right "#{E:@claude_badge_summary}<your existing status-right>"
 
-# choose-tree (prefix+w) — branche window et branche pane :
+# choose-tree (prefix+w) — window and pane branches:
 bind w choose-tree -Zw -F "#{?pane_format,#{E:@claude_badge_pane}...,#{?window_format,#{E:@claude_badge_win}...,...}}"
 ```
 
-## Personnalisation
+## Customization
 
-À définir **avant** le `run-shell` du plugin :
+Set these **before** the plugin's `run-shell`:
 
 ```tmux
-set -g @claude_status_color "#D97757"        # orange Claude par défaut
-set -g @claude_status_error_color "red"      # défaut : @thm_red catppuccin, sinon red ANSI
-set -g @claude_status_icon_working "✱"       # fallback statique quand pas d'animation
+set -g @claude_status_color "#D97757"        # Claude orange (default)
+set -g @claude_status_error_color "red"      # default: catppuccin @thm_red, else ANSI red
+set -g @claude_status_icon_working "✱"       # static fallback when no animation
 set -g @claude_status_icon_need_input "?"
 set -g @claude_status_icon_waiting "●"
 set -g @claude_status_icon_error "✗"
-set -g @claude_spinner_frames "✻ ✳ ✶ ✱"     # frames de l'animation, séparées par espaces
-set -g @claude_status_jump_key "C"           # prefix+C → prochaine fenêtre need_input
-                                             # (puis error) en cycling ; vide = pas de binding
+set -g @claude_status_summary_icon "..."     # default: nerd-font robot
+set -g @claude_spinner_frames "✻ ✳ ✶ ✱"     # animation frames, space-separated
+set -g @claude_status_jump_key "C"           # prefix+C → next need_input window
+                                             # (then error), cycling; empty = no binding
 ```
 
-## Limitations connues
+## Known limitations
 
-- Un `choose-tree` déjà ouvert ne se rafraîchit pas (ni animation ni
-  changements de statut) ; il est à jour à chaque ouverture.
-- L'animation est coupée quand aucun client n'est attaché (rien à animer).
-- Après un `kill -9` de claude, le badge disparaît au prochain sweep du
-  démon (≤ ~5 s), pas instantanément.
-- La durée `? 3m` est rafraîchie au rythme du sweep (~5 s).
+- An already-open `choose-tree` does not refresh (no animation nor status
+  changes); it is up to date each time it opens.
+- Animation pauses when no client is attached (nothing to animate).
+- After a `kill -9` of claude, the badge disappears at the next daemon sweep
+  (≤ ~5 s), not instantly.
+- The `? 3m` duration refreshes at sweep pace (~5 s).
+- If you answer a permission prompt and the following tool runs for a long
+  time, the `?` can persist until that tool's `PostToolUse` fires.
 
-## Prérequis
+## Requirements
 
-- tmux ≥ 3.4 (user options pane-scope, hooks `pane-exited`/`after-kill-pane`)
-- Claude Code avec support des hooks
-- Aucune dépendance (POSIX sh, sed, awk, ps)
+- tmux ≥ 3.4 (pane-scoped user options, `pane-exited`/`after-kill-pane` hooks)
+- Claude Code with hooks support
+- No dependencies (POSIX sh, sed, awk, ps)
+- A [Nerd Font](https://www.nerdfonts.com/) for the default summary icon and
+  powerline separators
+
+## License
+
+[MIT](LICENSE)
