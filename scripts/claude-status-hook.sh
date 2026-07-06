@@ -83,8 +83,11 @@ if [ "$mode" != "recompute" ]; then
   if [ -n "$status" ]; then
     tmux set -p -t "$TMUX_PANE" @claude_pane_status "$status" 2>/dev/null || exit 0
     tmux set -p -t "$TMUX_PANE" @claude_pane_status_since "$(date +%s)" 2>/dev/null
-    # A real event reasserts authority over any daemon activity-promotion.
+    # A real event reasserts authority over any daemon activity-promotion:
+    # drop the promotion origin AND the "hot" freshness flag, so a leftover
+    # flag can't re-promote this fresh status on the daemon's next sweep.
     tmux set -pu -t "$TMUX_PANE" @claude_pane_promoted 2>/dev/null
+    tmux set -pu -t "$TMUX_PANE" @claude_pane_hot 2>/dev/null
     # Claude PID for the daemon's liveness check — only when absent (the
     # sweep unsets it when the process dies).
     if [ -z "$(tmux show -pqv -t "$TMUX_PANE" @claude_pane_pid 2>/dev/null)" ]; then
@@ -104,6 +107,8 @@ if [ "$mode" != "recompute" ]; then
     tmux set -pu -t "$TMUX_PANE" @claude_pane_pid 2>/dev/null
     tmux set -pu -t "$TMUX_PANE" @claude_pane_flavor 2>/dev/null
     tmux set -pu -t "$TMUX_PANE" @claude_pane_promoted 2>/dev/null
+    tmux set -pu -t "$TMUX_PANE" @claude_pane_hot 2>/dev/null
+    tmux set -pu -t "$TMUX_PANE" @claude_pane_scrhash 2>/dev/null
   fi
   win="$TMUX_PANE"  # a pane id is a valid target-window for list-panes
 fi
