@@ -158,8 +158,10 @@ set -g @claude_status_icon_waiting_old "•"    # waiting for > 5 min
 set -g @claude_status_icon_waiting_stale "·"  # waiting for > 30 min (dimmed)
 set -g @claude_status_waiting_old_secs 300    # aging thresholds (seconds)
 set -g @claude_status_waiting_stale_secs 1800
-set -g @claude_status_subq_stale_secs 1800    # drop a pending subagent
-                                              # permission after this (backstop)
+set -g @claude_status_subq_stale_secs 14400   # drop a pending subagent
+                                              # permission after this — leak
+                                              # backstop only (Stop clears it
+                                              # in the normal case), 4h default
 set -g @claude_status_icon_error "✗"
 set -g @claude_status_summary_icon "..."     # default: nerd-font robot
 set -g @claude_spinner_frames "✻ ✳ ✶ ✱"     # animation frames, space-separated

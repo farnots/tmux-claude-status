@@ -62,9 +62,11 @@ err_color=$(opt @claude_status_error_color_resolved "red")
 # Waiting badge aging thresholds (seconds): ● → • after old, → · after stale
 old_secs=$(opt @claude_status_waiting_old_secs 300)
 stale_secs=$(opt @claude_status_waiting_stale_secs 1800)
-# Pending subagent permission tokens expire after this (leak backstop if a
-# decrement event was missed).
-subq_stale=$(opt @claude_status_subq_stale_secs 1800)
+# Pending subagent permission tokens expire after this — a last-resort leak
+# backstop for a session stuck mid-turn (the end-of-turn Stop already clears
+# the set in the normal case). Kept long so a genuinely long-pending permission
+# (user away from keyboard) is not dropped while it is still on screen.
+subq_stale=$(opt @claude_status_subq_stale_secs 14400)
 # Color to return to after the ✗ segment: set by the entry point according
 # to the summary rendering context (theme fg in pill mode, orange otherwise).
 text_fg=$(opt @claude_status_summary_text_fg "$color")
