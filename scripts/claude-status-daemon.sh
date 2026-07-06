@@ -10,13 +10,17 @@
 #   @claude_spinner_frame   (global) : animation frame while ≥1 window works
 #   @claude_status_summary  (global) : all-windows summary "?1 ✗1 ✱3 ●2"
 #   @claude_win_wait        (window) : waiting duration of need_input windows
-# Plus: liveness — clears the status of panes whose claude process is dead.
+#   @claude_win_subq(_disp) (window) : pending subagent permission count/suffix
+# Plus: expires stale @claude_pane_subagents tokens and refreshes the pane/
+# window subagent suffixes. Plus: liveness — clears the status of panes whose
+# claude process is dead.
 # The hook remains the authority on statuses in event-driven mode; the daemon
 # only recomputes a window aggregate for panes it just cleared.
 
 sock=$1
 [ -S "$sock" ] || exit 0
 t() { tmux -S "$sock" "$@"; }
+. "$(cd "$(dirname "$0")" && pwd)/claude-status-lib.sh"
 
 # ---- single instance: atomic mkdir lock, named after the server pid ----
 server_pid=$(t display -p '#{pid}' 2>/dev/null) || exit 0
@@ -58,6 +62,9 @@ err_color=$(opt @claude_status_error_color_resolved "red")
 # Waiting badge aging thresholds (seconds): ● → • after old, → · after stale
 old_secs=$(opt @claude_status_waiting_old_secs 300)
 stale_secs=$(opt @claude_status_waiting_stale_secs 1800)
+# Pending subagent permission tokens expire after this (leak backstop if a
+# decrement event was missed).
+subq_stale=$(opt @claude_status_subq_stale_secs 1800)
 # Color to return to after the ✗ segment: set by the entry point according
 # to the summary rendering context (theme fg in pill mode, orange otherwise).
 text_fg=$(opt @claude_status_summary_text_fg "$color")
@@ -75,14 +82,14 @@ sweep() {
   now=$(date +%s); changed=0; mode=none
 
   panes=$(t list-panes -a -F \
-    '#{pane_id}|#{window_id}|#{pane_tty}|#{@claude_pane_status}|#{@claude_pane_pid}|#{@claude_pane_status_since}|#{@claude_pane_promoted}' \
+    '#{pane_id}|#{window_id}|#{pane_tty}|#{@claude_pane_status}|#{@claude_pane_pid}|#{@claude_pane_status_since}|#{@claude_pane_promoted}|#{@claude_pane_subagents}' \
     2>/dev/null) || { cleanup; exit 0; }
 
   # 1) liveness: a single batched ps; dead = pid gone OR different tty
   #    (the claude process keeps the pane's tty; guards against PID reuse)
   pids=""
-  while IFS='|' read -r pane win tty st pid since prom; do
-    [ -n "$st" ] && [ -n "$pid" ] && pids="$pids,$pid"
+  while IFS='|' read -r pane win tty st pid since prom subs; do
+    { [ -n "$st" ] || [ -n "$subs" ]; } && [ -n "$pid" ] && pids="$pids,$pid"
   done <<EOF
 $panes
 EOF
@@ -92,8 +99,8 @@ EOF
 
   dead_windows=""
   live_panes=""
-  while IFS='|' read -r pane win tty st pid since prom; do
-    [ -n "$st" ] || continue
+  while IFS='|' read -r pane win tty st pid since prom subs; do
+    [ -n "$st" ] || [ -n "$subs" ] || continue
     if [ -n "$pid" ]; then
       ptty=$(printf '%s\n' "$alive" | awk -v p="$pid" '$1==p{print $2}')
       if [ -z "$ptty" ] || [ "${tty#/dev/tty}" != "$ptty" ]; then
@@ -101,13 +108,15 @@ EOF
           set -pu -t "$pane" @claude_pane_pid \; \
           set -pu -t "$pane" @claude_pane_status_since \; \
           set -pu -t "$pane" @claude_pane_flavor \; \
-          set -pu -t "$pane" @claude_pane_promoted 2>/dev/null
+          set -pu -t "$pane" @claude_pane_promoted \; \
+          set -pu -t "$pane" @claude_pane_subagents \; \
+          set -pu -t "$pane" @claude_pane_subq_disp 2>/dev/null
         dead_windows="$dead_windows $win"; changed=1
         continue
       fi
     fi
     live_panes="$live_panes
-$pane|$win|$st|$since|$prom"
+$pane|$win|$st|$since|$prom|$subs"
   done <<EOF
 $panes
 EOF
@@ -130,6 +139,55 @@ EOF
     fi
   done
 
+  # 2b) subagent permission counters (orthogonal to the main-loop status).
+  #     Expire stale tokens (missed decrement backstop), refresh each pane's
+  #     rendered suffix, then sum per window. subq_total feeds the summary.
+  subq_total=0
+  subq_pw=""   # "window count" per live pane, for the per-window sums
+  while IFS='|' read -r pane win st since prom subs; do
+    [ -n "$pane" ] || continue
+    new=$(subq_expire "$subs" "$now" "$subq_stale")
+    if [ "$new" != "$subs" ]; then
+      if [ -n "$new" ]; then
+        t set -p -t "$pane" @claude_pane_subagents "$new" 2>/dev/null
+      else
+        t set -pu -t "$pane" @claude_pane_subagents 2>/dev/null
+      fi
+      changed=1
+    fi
+    c=$(subq_count "$new")
+    d=$(subq_disp "$c")
+    cur_d=$(t show -pqv -t "$pane" @claude_pane_subq_disp 2>/dev/null)
+    if [ "$d" != "$cur_d" ]; then
+      if [ -n "$d" ]; then
+        t set -p -t "$pane" @claude_pane_subq_disp "$d" 2>/dev/null
+      else
+        t set -pu -t "$pane" @claude_pane_subq_disp 2>/dev/null
+      fi
+      changed=1
+    fi
+    subq_pw="$subq_pw
+$win $c"
+  done <<EOF
+$live_panes
+EOF
+  # Per-window sums; set/unset @claude_win_subq(_disp) over ALL windows so a
+  # window that dropped to zero is cleared.
+  sums=$(printf '%s\n' "$subq_pw" | awk 'NF==2{a[$1]+=$2} END{for(w in a) print w, a[w]}')
+  for wl in $(t list-windows -a -F '#{window_id}|#{@claude_win_subq}' 2>/dev/null); do
+    win=${wl%%|*}; had=${wl#*|}
+    wsum=$(printf '%s\n' "$sums" | awk -v w="$win" '$1==w{print $2}')
+    [ -n "$wsum" ] || wsum=0
+    subq_total=$((subq_total + wsum))
+    if [ "$wsum" -gt 0 ]; then
+      [ "$had" != "$wsum" ] && { t set -w -t "$win" @claude_win_subq "$wsum" \; \
+        set -w -t "$win" @claude_win_subq_disp "$(subq_disp "$wsum")" 2>/dev/null; changed=1; }
+    elif [ -n "$had" ]; then
+      t set -wu -t "$win" @claude_win_subq \; \
+        set -wu -t "$win" @claude_win_subq_disp 2>/dev/null; changed=1
+    fi
+  done
+
   # 3) per window: counters (window granularity), need_input durations, and
   #    activity-based correction. Hooks can't see everything: answering a
   #    question or a background agent running after end-of-turn emit no
@@ -148,7 +206,7 @@ EOF
     if [ "$agg" = "need_input" ] || [ "$agg" = "waiting" ]; then
       if [ "$fresh" = 1 ] && [ "$hot" = 1 ]; then
         # Sustained redraw: Claude is actually working. Promote.
-        while IFS='|' read -r p w st since prom; do
+        while IFS='|' read -r p w st since prom subs; do
           [ "$w" = "$win" ] || continue
           case "$st" in
             need_input|waiting)
@@ -172,7 +230,7 @@ EOF2
          [ -n "$activity" ] && [ $((now - activity)) -gt 8 ]; then
       # Output went quiet: roll back panes WE promoted (never hook-set ones).
       rolled=""
-      while IFS='|' read -r p w st since prom; do
+      while IFS='|' read -r p w st since prom subs; do
         [ "$w" = "$win" ] && [ "$st" = "working" ] && [ -n "$prom" ] || continue
         t set -p -t "$p" @claude_pane_status "$prom" \; \
           set -p -t "$p" @claude_pane_status_since "$now" \; \
@@ -198,7 +256,7 @@ EOF2
       need_input)
         n_need=$((n_need+1))
         min_since=""
-        while IFS='|' read -r p w st since prom; do
+        while IFS='|' read -r p w st since prom subs; do
           [ "$w" = "$win" ] && [ "$st" = "need_input" ] && [ -n "$since" ] || continue
           if [ -z "$min_since" ] || [ "$since" -lt "$min_since" ]; then min_since=$since; fi
         done <<EOF2
@@ -214,7 +272,7 @@ EOF2
         n_wait=$((n_wait+1))
         # Aging bucket: how long has this window been waiting unattended?
         min_since=""
-        while IFS='|' read -r p w st since prom; do
+        while IFS='|' read -r p w st since prom subs; do
           [ "$w" = "$win" ] && [ "$st" = "waiting" ] && [ -n "$since" ] || continue
           if [ -z "$min_since" ] || [ "$since" -lt "$min_since" ]; then min_since=$since; fi
         done <<EOF2
@@ -245,7 +303,9 @@ EOF2
 $wins
 EOF
 
-  # 4) global summary (zeros omitted, actionability order)
+  # 4) global summary (zeros omitted, actionability order). The "?" count
+  #    folds main-thread need_input windows and pending subagent permissions.
+  n_need=$((n_need + subq_total))
   summary=""
   [ "$n_need" -gt 0 ] && summary="${summary}${icon_need}${n_need} "
   [ "$n_err"  -gt 0 ] && summary="${summary}#[fg=${err_color}]${icon_err}${n_err}#[fg=${text_fg}] "
@@ -261,7 +321,7 @@ EOF
     changed=1
   }
 
-  # 5) mode for the main loop
+  # 5) mode for the main loop (n_need already includes subq_total)
   total=$((n_need + n_err + n_work + n_wait))
   clients=$(t list-clients 2>/dev/null | grep -c .)
   if [ "$total" -eq 0 ]; then

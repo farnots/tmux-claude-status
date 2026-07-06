@@ -51,26 +51,31 @@ tmux set -g @claude_status_error_color_resolved "$err_color"
 # tmux format WARNING: never put a comma inside a #[...] — tmux counts the
 # commas of #{?,,} ternaries without following square brackets.
 #
-# 4-state badge: need_input > error > working > waiting.
+# Badge = <main-loop glyph><after><subagent suffix> + one trailing space.
+#   main-loop status: need_input > error > working > waiting
 #   - color: red for error, orange otherwise
 #   - working: spinner frame while the daemon runs, static icon otherwise
-#   - need_input (window badge): waiting duration when set by the daemon
+#   - need_input (window badge): waiting duration (wait_part) after the glyph
+#   - subagent suffix (disp_opt: "?", "?²", ...): pending subagent permissions,
+#     always orange; shown alongside the main glyph (e.g. working → "✱?²")
 badge() {
-  local opt="$1" wait_part="$2"
-  printf '#{?#{%s},#{?#{==:#{%s},error},#[fg=%s],#[fg=%s]}#[bold]#{?#{==:#{%s},need_input},%s %s,#{?#{==:#{%s},error},%s ,#{?#{==:#{%s},working},#{?#{@claude_spinner_frame},#{E:@claude_spinner_frame},%s} ,#{?#{==:#{@claude_win_age},2},#[dim]%s #[nodim],#{?#{==:#{@claude_win_age},1},%s ,%s }}}}}#[nobold]#[fg=default],}' \
-    "$opt" \
+  local opt="$1" wait_part="$2" disp_opt="$3"
+  printf '#{?#{%s}#{%s},#{?#{==:#{%s},error},#[fg=%s],#[fg=%s]}#[bold]#{?#{%s},#{?#{==:#{%s},need_input},%s%s,#{?#{==:#{%s},error},%s,#{?#{==:#{%s},working},#{?#{@claude_spinner_frame},#{E:@claude_spinner_frame},%s},#{?#{==:#{@claude_win_age},2},#[dim]%s#[nodim],#{?#{==:#{@claude_win_age},1},%s,%s}}}}},}#[nobold]#{?#{%s},#[fg=%s]#[bold]#{%s}#[nobold],}#[fg=default] ,}' \
+    "$opt" "$disp_opt" \
     "$opt" "$err_color" "$color" \
+    "$opt" \
     "$opt" "$icon_need_input" "$wait_part" \
     "$opt" "$icon_error" \
     "$opt" "$icon_working" \
-    "$icon_waiting_stale" "$icon_waiting_old" "$icon_waiting"
+    "$icon_waiting_stale" "$icon_waiting_old" "$icon_waiting" \
+    "$disp_opt" "$color" "$disp_opt"
 }
 
-# Waiting duration (window option set by the daemon), conditional space.
-win_wait='#{?#{@claude_win_wait},#{@claude_win_wait} ,}'
+# Waiting duration (window option set by the daemon), conditional leading space.
+win_wait='#{?#{@claude_win_wait}, #{@claude_win_wait},}'
 
-tmux set -g @claude_badge_win "$(badge '@claude_win_status' "$win_wait")"
-tmux set -g @claude_badge_pane "$(badge '@claude_pane_status' '')"
+tmux set -g @claude_badge_win "$(badge '@claude_win_status' "$win_wait" '@claude_win_subq_disp')"
+tmux set -g @claude_badge_pane "$(badge '@claude_pane_status' '' '@claude_pane_subq_disp')"
 
 # Global summary (text set by the daemon). If catppuccin is loaded
 # (@thm_surface_0 present), rendered as a "pill" like its status modules:

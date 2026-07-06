@@ -1,15 +1,18 @@
 #!/bin/sh
 # claude-status-jump.sh — jumps to the next window where Claude is waiting.
-# Deterministic cycling over the stable order of list-windows; need_input
-# first, then error. No fallback to working (nothing actionable there).
+# Deterministic cycling over the stable order of list-windows; main-thread
+# need_input first, then pending subagent permissions, then error. No fallback
+# to working (nothing actionable there).
 
 [ -n "$TMUX" ] || exit 0
 cur=$(tmux display -p '#{window_id}')
 
-pick_next() {  # $1 = status to look for; switch + exit when found
+# pick_next MATCH → cycle to the next window whose "field" (column 2) equals
+# MATCH; MATCH="+" means any non-empty field (used for the subagent count).
+pick_next() {  # $1 = field option name, $2 = value to match ("+" = non-empty)
   first=""; next=""; seen=0
-  for w in $(tmux list-windows -a -F '#{window_id}|#{@claude_win_status}' \
-             | awk -F'|' -v st="$1" '$2==st{print $1}'); do
+  for w in $(tmux list-windows -a -F "#{window_id}|#{$1}" \
+             | awk -F'|' -v m="$2" '(m=="+" && $2!="") || $2==m {print $1}'); do
     [ -z "$first" ] && first=$w
     [ "$seen" = 1 ] && { next=$w; break; }
     [ "$w" = "$cur" ] && seen=1
@@ -18,6 +21,7 @@ pick_next() {  # $1 = status to look for; switch + exit when found
   [ -n "$next" ] && { tmux switch-client -t "$next"; exit 0; }
 }
 
-pick_next need_input
-pick_next error
+pick_next @claude_win_status need_input
+pick_next @claude_win_subq +
+pick_next @claude_win_status error
 tmux display-message "claude: no window waiting for input"
