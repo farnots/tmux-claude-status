@@ -13,6 +13,12 @@ shortcut to jump straight to the session that needs you.
 | waiting | `●` orange | Turn finished, Claude waits for a prompt |
 | error | `✗` red | Claude stopped on an error (StopFailure) |
 
+**Subagent permissions.** A permission requested by a subagent (e.g. `Bash
+command · from the Explore agent`) does not replace the main-loop glyph —
+the main loop is still orchestrating. Instead a count is appended: `✱?` for
+one pending subagent permission, `✱?²` for two, etc. (the `?` is always
+orange). A plain `?` (no leading glyph) remains a main-thread permission.
+
 Windows without a Claude session show nothing. The waiting badge **ages**:
 `●` shrinks to `•` after 5 minutes and to a dimmed `·` after 30 minutes,
 so sessions you have not checked in a while fade out visually.
@@ -37,8 +43,12 @@ on every event. The script sets tmux user options:
 - `@claude_pane_pid` (pane) — claude process PID (for liveness)
 - `@claude_pane_flavor` (pane) — config dir name (`claude`, `claude-work`, …),
   handy because the Claude Code binary is named after its version number
+- `@claude_pane_subagents` (pane) — `agent_id:epoch` set of subagents currently
+  blocked on a permission; `@claude_pane_subq_disp` — its rendered suffix
 - `@claude_win_status` (window) — aggregate, priority
   `need_input` > `error` > `working` > `waiting`
+- `@claude_win_subq` / `@claude_win_subq_disp` (window) — pending subagent
+  permission count and its rendered suffix
 
 **Companion daemon** (`scripts/claude-status-daemon.sh`) — started on demand
 by the hook, **child of the tmux server** (spawned via `run-shell -b`, dies
@@ -51,8 +61,11 @@ session remains. It handles everything that needs time or computation:
   `@claude_pane_pid` is alive **and** on its pane's tty (robust against
   kill -9 and PID reuse); otherwise clears the status
 - **durations**: `@claude_win_wait` (“3m”) for need_input windows
+- **subagent counters**: expires stale `@claude_pane_subagents` tokens
+  (backstop for a missed decrement) and refreshes the per-pane/window suffixes
 - **global summary**: `@claude_status_summary` (“?1 ✗1 ✱3 ●2”),
-  counted per window, zeros omitted
+  counted per window, zeros omitted; the `?` count folds main-thread
+  need_input **and** pending subagent permissions
 
 **Badges** are composed by `claude-status.tmux`; reference them with
 `#{E:...}`: `@claude_badge_win`, `@claude_badge_pane`,
@@ -63,14 +76,22 @@ a session from `waiting` to `working`. Tool events
 (`PreToolUse`/`PostToolUse`/`PreCompact`) set a “soft” working that never
 overrides a `waiting` — essential because hooks run in parallel and these
 events can arrive after the end-of-turn `Stop` (background agents run tools
-too). `SubagentStop` is intentionally not wired: a subagent finishing says
-nothing about the main loop state.
+too).
 
 **No phantom need_input**: `need_input` comes from `Notification`
 (`notification_type=permission_prompt`), which only fires when the question
 actually reaches the user — NOT from `PermissionRequest`, which fires for
 every request including ones auto-approved by another hook (a long tool
 would keep a phantom `?` for its whole duration).
+
+**Subagent permissions** are told apart from main-thread ones by the
+`agent_id` field Claude Code adds to a hook's JSON when it fires inside a
+subagent. A `permission_prompt` **with** `agent_id` increments a per-pane
+counter (`@claude_pane_subagents`) instead of touching the main-loop status,
+so the daemon's activity heuristic can never erase it. The counter is
+decremented when that subagent's next tool event (`PreToolUse`/`PostToolUse`)
+or its `SubagentStop` fires; the end-of-turn `Stop` clears any remainder, and
+the daemon expires stale tokens as a last resort.
 
 ## Installation
 
@@ -100,7 +121,8 @@ Merge the blocks from
 [`examples/claude-settings-hooks.json`](examples/claude-settings-hooks.json)
 into the `hooks` section of `~/.claude/settings.json` (append at the end of
 each event array, without touching your existing hooks — hooks of the same
-event run in parallel).
+event run in parallel). The `SubagentStop` block is what keeps the subagent
+permission counter accurate.
 
 ⚠️ Already-open Claude sessions pick up new hooks only after a restart.
 
@@ -136,6 +158,10 @@ set -g @claude_status_icon_waiting_old "•"    # waiting for > 5 min
 set -g @claude_status_icon_waiting_stale "·"  # waiting for > 30 min (dimmed)
 set -g @claude_status_waiting_old_secs 300    # aging thresholds (seconds)
 set -g @claude_status_waiting_stale_secs 1800
+set -g @claude_status_subq_stale_secs 14400   # drop a pending subagent
+                                              # permission after this — leak
+                                              # backstop only (Stop clears it
+                                              # in the normal case), 4h default
 set -g @claude_status_icon_error "✗"
 set -g @claude_status_summary_icon "..."     # default: nerd-font robot
 set -g @claude_spinner_frames "✻ ✳ ✶ ✱"     # animation frames, space-separated
