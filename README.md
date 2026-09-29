@@ -10,6 +10,7 @@ shortcut to jump straight to the session that needs you.
 |---|---|---|
 | working | `✻` animated, orange | Claude is processing a prompt / running tools |
 | need input | `? 3m` bold orange | Claude is waiting for a permission — with waiting time |
+| background | `✻2` animated, orange | Turn finished, but 2 subagents still run in the background |
 | waiting | `●` orange | Turn finished, Claude waits for a prompt |
 | error | `✗` red | Claude stopped on an error (StopFailure) |
 
@@ -37,8 +38,11 @@ on every event. The script sets tmux user options:
 - `@claude_pane_pid` (pane) — claude process PID (for liveness)
 - `@claude_pane_flavor` (pane) — config dir name (`claude`, `claude-work`, …),
   handy because the Claude Code binary is named after its version number
+- `@claude_pane_agents` / `@claude_pane_agents_n` (pane) — ids and count of
+  the running subagents
 - `@claude_win_status` (window) — aggregate, priority
-  `need_input` > `error` > `working` > `waiting`
+  `need_input` > `error` > `working` > `background` > `waiting`
+- `@claude_win_agents` (window) — subagents running in its background panes
 
 **Companion daemon** (`scripts/claude-status-daemon.sh`) — started on demand
 by the hook, **child of the tmux server** (spawned via `run-shell -b`, dies
@@ -46,19 +50,22 @@ with it), single instance (mkdir lock), exits by itself when no Claude
 session remains. It handles everything that needs time or computation:
 
 - **animation**: `@claude_spinner_frame` advances at ~2.5 fps while ≥1
-  window is working AND ≥1 client is attached
+  window is working or background AND ≥1 client is attached
 - **liveness**: one batched `ps` per sweep (~5 s) checks that each
   `@claude_pane_pid` is alive **and** on its pane's tty (robust against
   kill -9 and PID reuse); otherwise clears the status
 - **self-correction**: hooks miss some transitions (answering a permission
   prompt emits nothing until the next tool completes). The daemon reads each
-  waiting/need_input pane and, when Claude's busy line (`✶ Cooking… (12s)`)
+  waiting/background/need_input pane and, when Claude's busy line (`✶ Cooking… (12s)`)
   is shown right above the prompt box, promotes it to working — and rolls
   it back once that line is gone. It reads the pane content rather than
   window activity: the agents panel ticks its timers every second even when
   idle, and teammate panes share the window
 - **durations**: `@claude_win_wait` (“3m”) for need_input windows
-- **global summary**: `@claude_status_summary` (“?1 ✗1 ✱3 ●2”),
+- **aggregates**: recomputes every window's status each sweep, so a pane
+  moved to another window (break-pane/join-pane, no hook fires) never leaves
+  a stale badge behind
+- **global summary**: `@claude_status_summary` (“?1 ✗1 ✱3 ✻1 ●2”),
   counted per window, zeros omitted
 
 **Badges** are composed by `claude-status.tmux`; reference them with
@@ -68,10 +75,18 @@ session remains. It handles everything that needs time or computation:
 **No phantom working**: only `UserPromptSubmit` (a genuine turn start) moves
 a session from `waiting` to `working`. Tool events
 (`PreToolUse`/`PostToolUse`/`PreCompact`) set a “soft” working that never
-overrides a `waiting` — essential because hooks run in parallel and these
-events can arrive after the end-of-turn `Stop` (background agents run tools
-too). `SubagentStop` is intentionally not wired: a subagent finishing says
-nothing about the main loop state.
+overrides a `waiting`/`background` — essential because hooks run in
+parallel and these events can arrive after the end-of-turn `Stop`
+(background agents run tools too).
+
+**Background subagents**: the end-of-turn `Stop` payload lists the work
+still in flight (`background_tasks`); its running `subagent` entries become
+the pane's agent set, and the session shows `background` instead of
+`waiting`. `SubagentStart`/`SubagentStop` add and remove ids, so the badge
+counts down and falls back to `waiting` when the last one finishes. Only
+subagents count: teammates idle for hours and background shells (a dev
+server) would keep a session busy forever. Each `Stop` rebuilds the set from
+scratch, which heals any missed event.
 
 **No phantom need_input**: `need_input` comes from `Notification`
 (`notification_type=permission_prompt`), which only fires when the question
@@ -138,6 +153,7 @@ set -g @claude_status_color "#D97757"        # Claude orange (default)
 set -g @claude_status_error_color "red"      # default: catppuccin @thm_red, else ANSI red
 set -g @claude_status_icon_working "✱"       # static fallback when no animation
 set -g @claude_status_icon_need_input "?"
+set -g @claude_status_icon_background "✻"    # summary, and badge fallback when no animation
 set -g @claude_status_icon_waiting "●"
 set -g @claude_status_icon_waiting_old "•"    # waiting for > 5 min
 set -g @claude_status_icon_waiting_stale "·"  # waiting for > 30 min (dimmed)
@@ -168,6 +184,10 @@ set -g @claude_status_jump_key "C"           # prefix+C → next need_input wind
 - No dependencies (POSIX sh, sed, awk, ps)
 - A [Nerd Font](https://www.nerdfonts.com/) for the default summary icon and
   powerline separators
+- macOS or Linux. On Windows, run tmux and Claude Code inside WSL; in
+  Windows Terminal, pick a Nerd Font in the profile (the spinner glyphs
+  `✻ ✳ ✶ ✱` fall back to Segoe UI Symbol and may look slightly different —
+  override `@claude_spinner_frames` and the icon options if needed)
 
 ## License
 

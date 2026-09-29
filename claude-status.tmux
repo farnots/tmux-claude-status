@@ -16,6 +16,8 @@
 #   @claude_status_icon_working     (default: ✱ — fallback without spinner)
 #   @claude_status_icon_need_input  (default: ?)
 #   @claude_status_icon_waiting     (default: ●)
+#   @claude_status_icon_background  (default: ✻ — summary, and badge fallback
+#                                    without spinner)
 #   @claude_status_icon_error       (default: ✗)
 #   @claude_status_summary_icon     (default: nerd-font robot)
 #   @claude_spinner_frames          (default: "✻ ✳ ✶ ✱", space-separated)
@@ -34,6 +36,8 @@ color=$(get_tmux_option "@claude_status_color" "#D97757")
 icon_working=$(get_tmux_option "@claude_status_icon_working" "✱")
 icon_need_input=$(get_tmux_option "@claude_status_icon_need_input" "?")
 icon_waiting=$(get_tmux_option "@claude_status_icon_waiting" "●")
+# Turn over but subagents still running: spinner + their count ("✻2").
+icon_background=$(get_tmux_option "@claude_status_icon_background" "✻")
 # Waiting badge "shrinks" with age (daemon sets @claude_win_age: 1 then 2)
 # to surface sessions left unattended — a terminal cannot change font size,
 # so smaller glyphs simulate it.
@@ -51,26 +55,28 @@ tmux set -g @claude_status_error_color_resolved "$err_color"
 # tmux format WARNING: never put a comma inside a #[...] — tmux counts the
 # commas of #{?,,} ternaries without following square brackets.
 #
-# 4-state badge: need_input > error > working > waiting.
+# 5-state badge: need_input > error > working > background > waiting.
 #   - color: red for error, orange otherwise
 #   - working: spinner frame while the daemon runs, static icon otherwise
+#   - background: same spinner, followed by the running subagents count
 #   - need_input (window badge): waiting duration when set by the daemon
 badge() {
-  local opt="$1" wait_part="$2"
-  printf '#{?#{%s},#{?#{==:#{%s},error},#[fg=%s],#[fg=%s]}#[bold]#{?#{==:#{%s},need_input},%s %s,#{?#{==:#{%s},error},%s ,#{?#{==:#{%s},working},#{?#{@claude_spinner_frame},#{E:@claude_spinner_frame},%s} ,#{?#{==:#{@claude_win_age},2},#[dim]%s #[nodim],#{?#{==:#{@claude_win_age},1},%s ,%s }}}}}#[nobold]#[fg=default],}' \
+  local opt="$1" wait_part="$2" count_opt="$3"
+  printf '#{?#{%s},#{?#{==:#{%s},error},#[fg=%s],#[fg=%s]}#[bold]#{?#{==:#{%s},need_input},%s %s,#{?#{==:#{%s},error},%s ,#{?#{==:#{%s},working},#{?#{@claude_spinner_frame},#{E:@claude_spinner_frame},%s} ,#{?#{==:#{%s},background},#{?#{@claude_spinner_frame},#{E:@claude_spinner_frame},%s}#{%s} ,#{?#{==:#{@claude_win_age},2},#[dim]%s #[nodim],#{?#{==:#{@claude_win_age},1},%s ,%s }}}}}}#[nobold]#[fg=default],}' \
     "$opt" \
     "$opt" "$err_color" "$color" \
     "$opt" "$icon_need_input" "$wait_part" \
     "$opt" "$icon_error" \
     "$opt" "$icon_working" \
+    "$opt" "$icon_background" "$count_opt" \
     "$icon_waiting_stale" "$icon_waiting_old" "$icon_waiting"
 }
 
 # Waiting duration (window option set by the daemon), conditional space.
 win_wait='#{?#{@claude_win_wait},#{@claude_win_wait} ,}'
 
-tmux set -g @claude_badge_win "$(badge '@claude_win_status' "$win_wait")"
-tmux set -g @claude_badge_pane "$(badge '@claude_pane_status' '')"
+tmux set -g @claude_badge_win "$(badge '@claude_win_status' "$win_wait" '@claude_win_agents')"
+tmux set -g @claude_badge_pane "$(badge '@claude_pane_status' '' '@claude_pane_agents_n')"
 
 # Global summary (text set by the daemon). If catppuccin is loaded
 # (@thm_surface_0 present), rendered as a "pill" like its status modules:

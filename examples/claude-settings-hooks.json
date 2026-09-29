@@ -25,6 +25,12 @@
     "SessionEnd": [
       { "hooks": [{ "type": "command", "command": "/bin/sh ~/.tmux/plugins/tmux-claude-status/scripts/claude-status-hook.sh session_end", "timeout": 5 }] }
     ],
+    "SubagentStart": [
+      { "hooks": [{ "type": "command", "command": "/bin/sh ~/.tmux/plugins/tmux-claude-status/scripts/claude-status-hook.sh subagent_start", "timeout": 5 }] }
+    ],
+    "SubagentStop": [
+      { "hooks": [{ "type": "command", "command": "/bin/sh ~/.tmux/plugins/tmux-claude-status/scripts/claude-status-hook.sh subagent_end", "timeout": 5 }] }
+    ],
     "StopFailure": [
       { "hooks": [{ "type": "command", "command": "/bin/sh ~/.tmux/plugins/tmux-claude-status/scripts/claude-status-hook.sh error", "timeout": 5 }] }
     ]

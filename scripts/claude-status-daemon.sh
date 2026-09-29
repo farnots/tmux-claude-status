@@ -8,11 +8,12 @@
 #
 # Responsibilities (exclusive ownership of these options):
 #   @claude_spinner_frame   (global) : animation frame while ≥1 window works
-#   @claude_status_summary  (global) : all-windows summary "?1 ✗1 ✱3 ●2"
+#   @claude_status_summary  (global) : all-windows summary "?1 ✗1 ✱3 ✻1 ●2"
 #   @claude_win_wait        (window) : waiting duration of need_input windows
 # Plus: liveness — clears the status of panes whose claude process is dead.
 # The hook remains the authority on statuses in event-driven mode; the daemon
-# only recomputes a window aggregate for panes it just cleared.
+# only recomputes a window aggregate (@claude_win_status, @claude_win_agents)
+# for panes it just cleared or corrected.
 
 sock=$1
 [ -S "$sock" ] || exit 0
@@ -37,6 +38,7 @@ acquire() {
   return 1  # lost the cleanup race: a concurrent daemon won, which is fine
 }
 acquire || exit 0
+agg_tmp="$lock/agg"  # scratch file of the sweep (inside our lock dir)
 
 cleanup() {
   t set -gu @claude_spinner_frame \; set -gu @claude_status_summary \; \
@@ -53,6 +55,7 @@ icon_need=$(opt @claude_status_icon_need_input "?")
 icon_err=$(opt @claude_status_icon_error "✗")
 icon_work=$(opt @claude_status_icon_working "✱")
 icon_wait=$(opt @claude_status_icon_waiting "●")
+icon_bg=$(opt @claude_status_icon_background "✻")
 color=$(opt @claude_status_color "#D97757")
 err_color=$(opt @claude_status_error_color_resolved "red")
 # Waiting badge aging thresholds (seconds): ● → • after old, → · after stale
@@ -90,23 +93,6 @@ pane_busy() {  # $1 = pane id; true when the main loop is working
     }' | grep -Eq "$busy_re"
 }
 
-win_aggregate() {  # $1 = window id; recompute @claude_win_status from panes
-  agg=""
-  for s in $(t list-panes -t "$1" -F '#{@claude_pane_status}' 2>/dev/null); do
-    case "$s" in
-      need_input) agg=need_input; break ;;
-      error)      agg=error ;;
-      working)    [ "$agg" != "error" ] && agg=working ;;
-      waiting)    [ -z "$agg" ] && agg=waiting ;;
-    esac
-  done
-  if [ -n "$agg" ]; then
-    t set -w -t "$1" @claude_win_status "$agg" 2>/dev/null
-  else
-    t set -wu -t "$1" @claude_win_status 2>/dev/null
-  fi
-}
-
 # Legacy window-activity heuristic marker: clear leftovers from older daemons
 for w in $(t list-windows -a -F '#{window_id}' 2>/dev/null); do
   t set -wu -t "$w" @claude_win_hot 2>/dev/null
@@ -132,19 +118,24 @@ EOF
   alive=""
   [ -n "$pids" ] && alive=$(ps -o pid=,tt= -p "$pids" 2>/dev/null)
 
-  dead_windows=""
   live_panes=""
   while IFS='|' read -r pane win tty st pid since prom; do
     [ -n "$st" ] || continue
     if [ -n "$pid" ]; then
       ptty=$(printf '%s\n' "$alive" | awk -v p="$pid" '$1==p{print $2}')
-      if [ -z "$ptty" ] || [ "${tty#/dev/tty}" != "$ptty" ]; then
+      # ps drops the /dev/ and tty prefixes: /dev/ttys003 → s003 (macOS),
+      # /dev/pts/0 → pts/0 (Linux, WSL)
+      ntty=${tty#/dev/}; ntty=${ntty#tty}
+      if [ -z "$ptty" ] || [ "$ntty" != "$ptty" ]; then
         t set -pu -t "$pane" @claude_pane_status \; \
           set -pu -t "$pane" @claude_pane_pid \; \
           set -pu -t "$pane" @claude_pane_status_since \; \
           set -pu -t "$pane" @claude_pane_flavor \; \
+          set -pu -t "$pane" @claude_pane_agents \; \
+          set -pu -t "$pane" @claude_pane_agents_n \; \
+          set -pu -t "$pane" @claude_pane_agents_done \; \
           set -pu -t "$pane" @claude_pane_promoted 2>/dev/null
-        dead_windows="$dead_windows $win"; changed=1
+        changed=1
         continue
       fi
     fi
@@ -157,33 +148,41 @@ EOF
   # 2) activity correction, per pane. Hooks can't see everything: answering
   #    a question emits no event until the next tool completes. But a working
   #    Claude shows its busy line right above the prompt box (pane_busy):
-  #    - need_input/waiting + busy line → promote to working (origin saved in
-  #      @claude_pane_promoted)
+  #    - need_input/background/waiting + busy line → promote to working
+  #      (origin saved in @claude_pane_promoted)
   #    - daemon-promoted working + busy line gone → roll back to origin
   #    Real hook events always clear @claude_pane_promoted (authority).
   #    Pane content, not window_activity: the agents panel ticks its timers
   #    every second even when everything is idle, and teammate panes in the
   #    same window produce output of their own.
-  touched_windows=$dead_windows
   corrected=""
   while IFS='|' read -r p w st since prom; do
     [ -n "$p" ] || continue
     case "$st" in
-      need_input|waiting)
+      need_input|background|waiting)
         if pane_busy "$p"; then
           t set -p -t "$p" @claude_pane_promoted "$st" \; \
             set -p -t "$p" @claude_pane_status working \; \
             set -p -t "$p" @claude_pane_status_since "$now" 2>/dev/null
           prom=$st; st=working; since=$now
-          touched_windows="$touched_windows $w"; changed=1
+          changed=1
         fi ;;
       working)
         if [ -n "$prom" ] && ! pane_busy "$p"; then
+          # subagents may have started or finished while we were promoted
+          case "$prom" in
+            waiting|background)
+              if [ -n "$(t show -pqv -t "$p" @claude_pane_agents 2>/dev/null)" ]; then
+                prom=background
+              else
+                prom=waiting
+              fi ;;
+          esac
           t set -p -t "$p" @claude_pane_status "$prom" \; \
             set -p -t "$p" @claude_pane_status_since "$now" \; \
             set -pu -t "$p" @claude_pane_promoted 2>/dev/null
           st=$prom; prom=""; since=$now
-          touched_windows="$touched_windows $w"; changed=1
+          changed=1
         fi ;;
     esac
     corrected="$corrected
@@ -193,15 +192,46 @@ $live_panes
 EOF
   live_panes=$corrected
 
-  # aggregates: only for windows we just cleared or corrected a pane in
-  for win in $(printf '%s\n' $touched_windows | sort -u); do
-    win_aggregate "$win"
-  done
+  # aggregates of every window, from fresh pane statuses (a hook may have
+  # raced the sweep): covers the panes cleared or corrected above, and panes
+  # moved between windows (break-pane/join-pane), which no hook reports.
+  # Same priority as the hook: need_input > error > working > background >
+  # waiting, plus the subagent count of the background panes.
+  t list-panes -a -F '#{window_id}|#{@claude_pane_status}|#{@claude_pane_agents_n}|#{@claude_win_status}|#{@claude_win_agents}' 2>/dev/null |
+    awk -F'|' '
+      function rank(s) {
+        if (s == "need_input") return 5; if (s == "error") return 4
+        if (s == "working") return 3; if (s == "background") return 2
+        if (s == "waiting") return 1; return 0
+      }
+      !($1 in agg) { agg[$1] = ""; n[$1] = 0; old[$1] = $4; old_n[$1] = $5; order[++k] = $1 }
+      rank($2) > rank(agg[$1]) { agg[$1] = $2 }
+      $2 == "background" { n[$1] += $3 }
+      END {
+        for (i = 1; i <= k; i++) {
+          w = order[i]; c = n[w] > 0 ? n[w] "" : ""
+          if (agg[w] != old[w] || c != old_n[w]) print w "|" agg[w] "|" c
+        }
+      }' > "$agg_tmp"
+  while IFS='|' read -r win agg n; do
+    [ -n "$win" ] || continue
+    if [ -n "$agg" ]; then
+      t set -w -t "$win" @claude_win_status "$agg" 2>/dev/null
+    else
+      t set -wu -t "$win" @claude_win_status 2>/dev/null
+    fi
+    if [ -n "$n" ]; then
+      t set -w -t "$win" @claude_win_agents "$n" 2>/dev/null
+    else
+      t set -wu -t "$win" @claude_win_agents 2>/dev/null
+    fi
+    changed=1
+  done < "$agg_tmp"
 
   # 3) per window: counters (window granularity), need_input durations and
   #    waiting age buckets
   wins=$(t list-windows -a -F '#{window_id}|#{@claude_win_status}|#{@claude_win_wait}|#{@claude_win_age}' 2>/dev/null)
-  n_need=0; n_err=0; n_work=0; n_wait=0
+  n_need=0; n_err=0; n_work=0; n_bg=0; n_wait=0
   while IFS='|' read -r win agg wait age; do
     case "$agg" in
       need_input)
@@ -219,6 +249,7 @@ EOF2
         fi ;;
       error)   n_err=$((n_err+1)) ;;
       working) n_work=$((n_work+1)) ;;
+      background) n_bg=$((n_bg+1)) ;;
       waiting)
         n_wait=$((n_wait+1))
         # Aging bucket: how long has this window been waiting unattended?
@@ -259,6 +290,7 @@ EOF
   [ "$n_need" -gt 0 ] && summary="${summary}${icon_need}${n_need} "
   [ "$n_err"  -gt 0 ] && summary="${summary}#[fg=${err_color}]${icon_err}${n_err}#[fg=${text_fg}] "
   [ "$n_work" -gt 0 ] && summary="${summary}${icon_work}${n_work} "
+  [ "$n_bg"   -gt 0 ] && summary="${summary}${icon_bg}${n_bg} "
   [ "$n_wait" -gt 0 ] && summary="${summary}${icon_wait}${n_wait} "
   summary=${summary% }
   [ "$summary" != "$(t show -gqv @claude_status_summary 2>/dev/null)" ] && {
@@ -271,11 +303,11 @@ EOF
   }
 
   # 5) mode for the main loop
-  total=$((n_need + n_err + n_work + n_wait))
+  total=$((n_need + n_err + n_work + n_bg + n_wait))
   clients=$(t list-clients 2>/dev/null | grep -c .)
   if [ "$total" -eq 0 ]; then
     mode=none
-  elif [ "$n_work" -gt 0 ] && [ "$clients" -gt 0 ]; then
+  elif [ $((n_work + n_bg)) -gt 0 ] && [ "$clients" -gt 0 ]; then
     mode=working
   else
     mode=idle
