@@ -50,6 +50,13 @@ session remains. It handles everything that needs time or computation:
 - **liveness**: one batched `ps` per sweep (~5 s) checks that each
   `@claude_pane_pid` is alive **and** on its pane's tty (robust against
   kill -9 and PID reuse); otherwise clears the status
+- **self-correction**: hooks miss some transitions (answering a permission
+  prompt emits nothing until the next tool completes). The daemon reads each
+  waiting/need_input pane and, when Claude's busy line (`✶ Cooking… (12s)`)
+  is shown right above the prompt box, promotes it to working — and rolls
+  it back once that line is gone. It reads the pane content rather than
+  window activity: the agents panel ticks its timers every second even when
+  idle, and teammate panes share the window
 - **durations**: `@claude_win_wait` (“3m”) for need_input windows
 - **global summary**: `@claude_status_summary` (“?1 ✗1 ✱3 ●2”),
   counted per window, zeros omitted
