@@ -106,8 +106,13 @@ sweep() {
     '#{pane_id}|#{window_id}|#{pane_tty}|#{@claude_pane_status}|#{@claude_pane_pid}|#{@claude_pane_status_since}|#{@claude_pane_promoted}' \
     2>/dev/null) || { cleanup; exit 0; }
 
-  # 1) liveness: a single batched ps; dead = pid gone OR different tty
+  # 1) liveness: dead = pid gone OR different tty
   #    (the claude process keeps the pane's tty; guards against PID reuse)
+  #    No batched `ps -p <list>`: on macOS it scans every process on the
+  #    system (seconds of CPU per sweep on a busy machine), while a single
+  #    pid is a direct lookup. So: kill -0 (builtin, no fork) for liveness,
+  #    and the tty looked up once per pid, then cached. The cache is dropped
+  #    every 60 sweeps to bound the PID-reuse window.
   pids=""
   while IFS='|' read -r pane win tty st pid since prom; do
     [ -n "$st" ] && [ -n "$pid" ] && pids="$pids,$pid"
@@ -115,8 +120,25 @@ sweep() {
 $panes
 EOF
   pids=${pids#,}
+  sweeps=$(( ${sweeps:-0} + 1 ))
+  [ $((sweeps % 60)) -eq 0 ] && ttycache=""
   alive=""
-  [ -n "$pids" ] && alive=$(ps -o pid=,tt= -p "$pids" 2>/dev/null)
+  nl='
+'
+  oldifs=$IFS; IFS=,
+  for pid in $pids; do
+    kill -0 "$pid" 2>/dev/null || continue
+    case "$nl$ttycache$nl" in
+      *"$nl$pid "*)
+        ptty="$nl$ttycache$nl"
+        ptty=${ptty#*"$nl$pid "}; ptty=${ptty%%"$nl"*} ;;
+      *)
+        ptty=$(ps -o tt= -p "$pid" 2>/dev/null | tr -d ' ') ;;
+    esac
+    [ -n "$ptty" ] && alive="$alive$nl$pid $ptty"
+  done
+  IFS=$oldifs
+  ttycache=$alive
 
   live_panes=""
   while IFS='|' read -r pane win tty st pid since prom; do
